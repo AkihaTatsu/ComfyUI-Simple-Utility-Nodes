@@ -29,6 +29,9 @@ A collection of simple utility nodes for ComfyUI including time-related, string 
 
 A timer for recording the running time of the workflow. The timer must be started with 'start/reset' mode before recording time.
 
+<details>
+<summary>Details</summary>
+
 **Inputs:**
 - `anything`: Passthrough input (any data type)
 - `timer_name`: Name of the timer (default: "timer")
@@ -46,9 +49,14 @@ A timer for recording the running time of the workflow. The timer must be starte
 - `anything`: Passthrough of input
 - `time`: The formatted time string
 
+</details>
+
 #### Simple Current Datetime
 
 Retrieve the current date and time.
+
+<details>
+<summary>Details</summary>
 
 **Inputs:**
 - `anything`: Passthrough input (any data type)
@@ -72,11 +80,16 @@ Retrieve the current date and time.
 - `Unix Timestamp (ms)`
 - And many more...
 
+</details>
+
 ### String-Related Nodes
 
 #### Simple String Append
 
 Append text to a string at the beginning or end.
+
+<details>
+<summary>Details</summary>
 
 **Inputs:**
 - `string`: The original string
@@ -88,9 +101,14 @@ Append text to a string at the beginning or end.
 **Outputs:**
 - `string`: The resulting appended string
 
+</details>
+
 #### Simple String Wrapping
 
 Wrap a string with prefix and suffix.
+
+<details>
+<summary>Details</summary>
 
 **Inputs:**
 - `string`: The original string
@@ -100,9 +118,14 @@ Wrap a string with prefix and suffix.
 **Outputs:**
 - `string`: The wrapped string
 
+</details>
+
 #### Simple String Severing
 
 Split a string into two parts using a delimiter.
+
+<details>
+<summary>Details</summary>
 
 **Inputs:**
 - `string`: The original string
@@ -117,11 +140,16 @@ Split a string into two parts using a delimiter.
 - `first_part`: Text before the delimiter
 - `second_part`: Text after the delimiter
 
+</details>
+
 ### Switch-Related Nodes
 
 #### Simple Switch with Random Mode
 
 Select one input from multiple inputs, with optional random selection. The number of visible input slots is controlled by the input_num widget.
+
+<details>
+<summary>Details</summary>
 
 **Inputs:**
 - `input_num`: Number of inputs to use (1-20)
@@ -134,9 +162,14 @@ Select one input from multiple inputs, with optional random selection. The numbe
 
 **Note:** An error will be raised if the selected input is not connected, or if random mode is enabled but no inputs are connected.
 
+</details>
+
 #### Simple Inversed Switch with Random Mode
 
 Distribute one input to one of multiple outputs, with optional random selection. The number of visible output slots is controlled by the output_num widget.
+
+<details>
+<summary>Details</summary>
 
 **Inputs:**
 - `anything`: The input value to distribute
@@ -147,11 +180,16 @@ Distribute one input to one of multiple outputs, with optional random selection.
 **Outputs:**
 - `output_1` to `output_N`: Output slots. Only the selected slot receives the input value; others are None.
 
+</details>
+
 ### Script-Related Nodes
 
 #### Simple Print to Console
 
 Print a message to the console with optional rich formatting and timestamp.
+
+<details>
+<summary>Details</summary>
 
 **Inputs:**
 - `anything`: Passthrough input (any data type)
@@ -162,11 +200,16 @@ Print a message to the console with optional rich formatting and timestamp.
 **Outputs:**
 - `anything`: Passthrough of input
 
+</details>
+
 #### Simple Python Script
 
 Execute a Python script in an isolated environment.
 
 **WARNING: This node uses Python's `exec()` function to execute arbitrary code. Only use scripts from trusted sources. Do not execute scripts from untrusted or unknown sources as they may contain malicious code that could compromise your system.**
+
+<details>
+<summary>Details</summary>
 
 **Inputs:**
 - `anything`: Passthrough input, available in script as `INPUT` variable
@@ -187,3 +230,5 @@ processed = str(data).upper()
 # Set RESULT to pass data to output
 RESULT = processed
 ```
+
+</details>
