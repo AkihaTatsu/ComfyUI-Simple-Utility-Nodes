@@ -1,0 +1,10 @@
+{
+    "SimplePrintToConsole": {
+        "default_is_rich_format": false,
+        "default_with_timestamp": false,
+        "default_message": ""
+    },
+    "SimplePythonScript": {
+        "default_script": "# Write your Python script here\n# The input is available as 'INPUT' variable\n# Define 'RESULT' variable to pass data to the output\n\nRESULT = None"
+    }
+}

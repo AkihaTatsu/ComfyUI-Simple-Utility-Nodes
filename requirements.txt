@@ -1,0 +1,8 @@
+# ComfyUI Simple Utility Nodes - Requirements
+#
+# Note: This is a ComfyUI custom node package.
+# ComfyUI must be installed separately.
+# See: https://github.com/comfyanonymous/ComfyUI
+
+# Required for rich text formatting in Simple Print to Console node
+rich>=10.0.0

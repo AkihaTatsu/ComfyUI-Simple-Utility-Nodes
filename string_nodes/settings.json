@@ -1,0 +1,16 @@
+{
+    "SimpleStringAppend": {
+        "default_append_position": false,
+        "default_append_text": ""
+    },
+    "SimpleStringWrapping": {
+        "default_prefix_text": "",
+        "default_suffix_text": ""
+    },
+    "SimpleStringSevering": {
+        "index_selector_options": ["first", "last", "decided by index"],
+        "default_delimiter": ",",
+        "default_index_selector": "first",
+        "default_delimiter_index": 0
+    }
+}

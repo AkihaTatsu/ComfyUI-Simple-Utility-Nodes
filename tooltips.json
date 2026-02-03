@@ -1,0 +1,114 @@
+{
+    "SimpleTimer": {
+        "node": "A timer for recording the running time of the workflow. Can be used to measure performance and execution time.",
+        "inputs": {
+            "anything": "Passthrough input. Any data type is accepted and will be passed to the output.",
+            "timer_name": "The name of the timer. Used as an identifier for the global timer.",
+            "mode": "The timer mode: 'start/reset' creates or resets the timer, 'total time record' shows time since start, 'since last record' shows time since last recording.",
+            "display_format": "The format for displaying time: 'number in seconds', 'number in nanoseconds', '%H:%M:%S.%f', or 'text description'."
+        },
+        "outputs": {
+            "anything": "Passthrough of the input data.",
+            "time": "The formatted time string based on the selected display format."
+        }
+    },
+    "SimpleCurrentDatetime": {
+        "node": "Retrieve the current date and time when this node is executed.",
+        "inputs": {
+            "anything": "Passthrough input. Any data type is accepted and will be passed to the output.",
+            "time_format": "The format for displaying the current time. Choose from a comprehensive list of common datetime formats.",
+            "use_custom_format": "If enabled, use the custom format string instead of the selected time format.",
+            "custom_format": "A custom datetime format string using Python strftime directives."
+        },
+        "outputs": {
+            "anything": "Passthrough of the input data.",
+            "datetime_string": "The current datetime as a formatted string."
+        }
+    },
+    "SimpleStringAppend": {
+        "node": "Append a string to another string at the beginning or end.",
+        "inputs": {
+            "string": "The original string to append to.",
+            "append_position": "Where to append: 'at the beginning' (True) or 'at the end' (False).",
+            "text_to_append": "The text to append to the original string."
+        },
+        "outputs": {
+            "string": "The resulting string after appending."
+        }
+    },
+    "SimpleStringWrapping": {
+        "node": "Wrap a string with a prefix and suffix.",
+        "inputs": {
+            "string": "The original string to wrap.",
+            "prefix": "The text to prepend to the beginning of the string.",
+            "suffix": "The text to append to the end of the string."
+        },
+        "outputs": {
+            "string": "The resulting wrapped string."
+        }
+    },
+    "SimpleStringSevering": {
+        "node": "Sever a string into two parts using a delimiter.",
+        "inputs": {
+            "string": "The original string to sever.",
+            "delimiter": "The delimiter to use for severing the string.",
+            "index_selector": "Which delimiter occurrence to use: 'first', 'last', or 'decided by index'.",
+            "delimiter_index": "The index of the delimiter to use (0-based). Only used when index_selector is 'decided by index'."
+        },
+        "outputs": {
+            "first_part": "The first part of the severed string (before the selected delimiter).",
+            "second_part": "The second part of the severed string (after the selected delimiter)."
+        }
+    },
+    "SimpleSwitchWithRandomMode": {
+        "node": "Select one input from multiple inputs. Supports random selection mode.",
+        "inputs": {
+            "input_num": "Number of inputs to use (1-20).",
+            "selected_index": "The index of the input to select (1-based). Ignored if random mode is enabled.",
+            "select_random": "If Yes, select an input randomly from connected inputs instead of using the selected index.",
+            "input_1": "First input (any data type).",
+            "input_2": "Second input (any data type).",
+            "input_N": "N-th input (any data type)."
+        },
+        "outputs": {
+            "output": "The selected input value."
+        }
+    },
+    "SimpleInversedSwitchWithRandomMode": {
+        "node": "Distribute one input to one of multiple outputs. Supports random selection mode.",
+        "inputs": {
+            "anything": "The input value to distribute.",
+            "output_num": "Number of outputs to use (1-20).",
+            "selected_index": "The index of the output to send the value to (1-based). Ignored if random mode is enabled.",
+            "select_random": "If Yes, select an output randomly instead of using the selected index."
+        },
+        "outputs": {
+            "output_1": "First output slot.",
+            "output_2": "Second output slot.",
+            "output_N": "N-th output slot. Only the selected slot receives the input value; others are None."
+        }
+    },
+    "SimplePrintToConsole": {
+        "node": "Print a message to the console with optional rich formatting and timestamp.",
+        "inputs": {
+            "anything": "Passthrough input. Any data type is accepted and will be passed to the output.",
+            "is_rich_format": "If Yes, interpret the message as rich markup (requires rich library).",
+            "with_timestamp": "If Yes, prepend a logging-style timestamp to the message.",
+            "message": "The message to print to the console."
+        },
+        "outputs": {
+            "anything": "Passthrough of the input data."
+        }
+    },
+    "SimplePythonScript": {
+        "node": "Execute a Python script in an isolated environment. The input is available as 'INPUT' variable.",
+        "inputs": {
+            "anything": "Passthrough input. Available in the script as the 'INPUT' variable.",
+            "script": "The Python script to execute. Define a 'RESULT' variable to pass data to the output."
+        },
+        "outputs": {
+            "anything": "Passthrough of the input data.",
+            "RESULT": "The value of the 'RESULT' variable defined in the script, or None if not defined."
+        }
+    }
+}

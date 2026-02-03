@@ -1,0 +1,16 @@
+{
+    "SimpleSwitchWithRandomMode": {
+        "default_input_num": 2,
+        "default_selected_index": 1,
+        "default_select_random": false,
+        "min_num": 1,
+        "max_num": 20
+    },
+    "SimpleInversedSwitchWithRandomMode": {
+        "default_output_num": 2,
+        "default_selected_index": 1,
+        "default_select_random": false,
+        "min_num": 1,
+        "max_num": 20
+    }
+}
