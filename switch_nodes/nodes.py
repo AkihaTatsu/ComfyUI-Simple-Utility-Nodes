@@ -15,7 +15,7 @@ with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
 class SimpleSwitchWithRandomMode:
     """Select one input from multiple inputs, optionally randomly."""
     
-    CATEGORY = "Simple Utility/Switch"
+    CATEGORY = "Simple Utility ⛏️/Switch"
     FUNCTION = "execute"
     RETURN_TYPES = ("*",)
     RETURN_NAMES = ("output",)
@@ -84,7 +84,7 @@ class SimpleSwitchWithRandomMode:
 class SimpleInversedSwitchWithRandomMode:
     """Distribute one input to one of multiple outputs, optionally randomly."""
     
-    CATEGORY = "Simple Utility/Switch"
+    CATEGORY = "Simple Utility ⛏️/Switch"
     FUNCTION = "execute"
     OUTPUT_NODE = True
     
@@ -159,6 +159,6 @@ NODE_CLASS_MAPPINGS = {
 
 # Display name mappings
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SimpleSwitchWithRandomMode": "Simple Switch with Random Mode",
-    "SimpleInversedSwitchWithRandomMode": "Simple Inversed Switch with Random Mode",
+    "SimpleSwitchWithRandomMode": "⛏️ Simple Switch with Random Mode",
+    "SimpleInversedSwitchWithRandomMode": "⛏️ Simple Inversed Switch with Random Mode",
 }

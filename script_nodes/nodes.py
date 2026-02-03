@@ -15,7 +15,7 @@ with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
 class SimplePrintToConsole:
     """Print a message to the console with optional rich formatting and timestamp."""
     
-    CATEGORY = "Simple Utility/Script"
+    CATEGORY = "Simple Utility ⛏️/Script"
     FUNCTION = "execute"
     RETURN_TYPES = ("*",)
     RETURN_NAMES = ("anything",)
@@ -68,7 +68,7 @@ class SimplePrintToConsole:
 class SimplePythonScript:
     """Execute a Python script in an isolated environment."""
     
-    CATEGORY = "Simple Utility/Script"
+    CATEGORY = "Simple Utility ⛏️/Script"
     FUNCTION = "execute"
     RETURN_TYPES = ("*", "*")
     RETURN_NAMES = ("anything", "RESULT")
@@ -117,6 +117,6 @@ NODE_CLASS_MAPPINGS = {
 
 # Display name mappings
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SimplePrintToConsole": "Simple Print to Console",
-    "SimplePythonScript": "Simple Python Script",
+    "SimplePrintToConsole": "⛏️ Simple Print to Console",
+    "SimplePythonScript": "⛏️ Simple Python Script",
 }

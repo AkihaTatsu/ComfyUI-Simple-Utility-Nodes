@@ -12,17 +12,17 @@ with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
     SETTINGS = json.load(f)
 
 
-class SimpleStringAppend:
+class SimpleStringAppending:
     """Append a string to another string."""
     
-    CATEGORY = "Simple Utility/String"
+    CATEGORY = "Simple Utility ⛏️/String"
     FUNCTION = "execute"
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("string",)
     
     @classmethod
     def INPUT_TYPES(cls):
-        settings = SETTINGS["SimpleStringAppend"]
+        settings = SETTINGS["SimpleStringAppending"]
         return {
             "required": {
                 "string": ("STRING", {"forceInput": True}),
@@ -52,7 +52,7 @@ class SimpleStringAppend:
 class SimpleStringWrapping:
     """Wrap a string with prefix and suffix."""
     
-    CATEGORY = "Simple Utility/String"
+    CATEGORY = "Simple Utility ⛏️/String"
     FUNCTION = "execute"
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("string",)
@@ -88,7 +88,7 @@ class SimpleStringWrapping:
 class SimpleStringSevering:
     """Sever a string by a delimiter."""
     
-    CATEGORY = "Simple Utility/String"
+    CATEGORY = "Simple Utility ⛏️/String"
     FUNCTION = "execute"
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("first_part", "second_part")
@@ -131,14 +131,14 @@ class SimpleStringSevering:
 
 # Node class mappings
 NODE_CLASS_MAPPINGS = {
-    "SimpleStringAppend": SimpleStringAppend,
+    "SimpleStringAppending": SimpleStringAppending,
     "SimpleStringWrapping": SimpleStringWrapping,
     "SimpleStringSevering": SimpleStringSevering,
 }
 
 # Display name mappings
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SimpleStringAppend": "Simple String Append",
-    "SimpleStringWrapping": "Simple String Wrapping",
-    "SimpleStringSevering": "Simple String Severing",
+    "SimpleStringAppending": "⛏️ Simple String Appending",
+    "SimpleStringWrapping": "⛏️ Simple String Wrapping",
+    "SimpleStringSevering": "⛏️ Simple String Severing",
 }

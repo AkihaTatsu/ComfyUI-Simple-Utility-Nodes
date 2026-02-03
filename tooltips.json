@@ -25,7 +25,7 @@
             "datetime_string": "The current datetime as a formatted string."
         }
     },
-    "SimpleStringAppend": {
+    "SimpleStringAppending": {
         "node": "Append a string to another string at the beginning or end.",
         "inputs": {
             "string": "The original string to append to.",

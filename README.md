@@ -25,7 +25,7 @@ A collection of simple utility nodes for ComfyUI including time-related, string 
 
 ### Time-Related Nodes
 
-#### Simple Timer
+#### ⛏️ Simple Timer
 
 A timer for recording the running time of the workflow. The timer must be started with 'start/reset' mode before recording time.
 
@@ -51,7 +51,7 @@ A timer for recording the running time of the workflow. The timer must be starte
 
 </details>
 
-#### Simple Current Datetime
+#### ⛏️ Simple Current Datetime
 
 Retrieve the current date and time.
 
@@ -84,7 +84,7 @@ Retrieve the current date and time.
 
 ### String-Related Nodes
 
-#### Simple String Append
+#### ⛏️ Simple String Appending
 
 Append text to a string at the beginning or end.
 
@@ -103,7 +103,7 @@ Append text to a string at the beginning or end.
 
 </details>
 
-#### Simple String Wrapping
+#### ⛏️ Simple String Wrapping
 
 Wrap a string with prefix and suffix.
 
@@ -120,7 +120,7 @@ Wrap a string with prefix and suffix.
 
 </details>
 
-#### Simple String Severing
+#### ⛏️ Simple String Severing
 
 Split a string into two parts using a delimiter.
 
@@ -144,7 +144,7 @@ Split a string into two parts using a delimiter.
 
 ### Switch-Related Nodes
 
-#### Simple Switch with Random Mode
+#### ⛏️ Simple Switch with Random Mode
 
 Select one input from multiple inputs, with optional random selection. The number of visible input slots is controlled by the input_num widget.
 
@@ -164,7 +164,7 @@ Select one input from multiple inputs, with optional random selection. The numbe
 
 </details>
 
-#### Simple Inversed Switch with Random Mode
+#### ⛏️ Simple Inversed Switch with Random Mode
 
 Distribute one input to one of multiple outputs, with optional random selection. The number of visible output slots is controlled by the output_num widget.
 
@@ -184,7 +184,7 @@ Distribute one input to one of multiple outputs, with optional random selection.
 
 ### Script-Related Nodes
 
-#### Simple Print to Console
+#### ⛏️ Simple Print to Console
 
 Print a message to the console with optional rich formatting and timestamp.
 
@@ -202,7 +202,7 @@ Print a message to the console with optional rich formatting and timestamp.
 
 </details>
 
-#### Simple Python Script
+#### ⛏️ Simple Python Script
 
 Execute a Python script in an isolated environment.
 

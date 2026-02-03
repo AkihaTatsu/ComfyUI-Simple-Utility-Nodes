@@ -20,7 +20,7 @@ with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
 class SimpleTimer:
     """A timer for recording the running time of the workflow."""
     
-    CATEGORY = "Simple Utility/Time"
+    CATEGORY = "Simple Utility ⛏️/Time"
     FUNCTION = "execute"
     RETURN_TYPES = ("*", "STRING")
     RETURN_NAMES = ("anything", "time")
@@ -83,7 +83,7 @@ class SimpleTimer:
 class SimpleCurrentDatetime:
     """Retrieve the current time when running through this node."""
     
-    CATEGORY = "Simple Utility/Time"
+    CATEGORY = "Simple Utility ⛏️/Time"
     FUNCTION = "execute"
     RETURN_TYPES = ("*", "STRING")
     RETURN_NAMES = ("anything", "datetime_string")
@@ -154,6 +154,6 @@ NODE_CLASS_MAPPINGS = {
 
 # Display name mappings
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SimpleTimer": "Simple Timer",
-    "SimpleCurrentDatetime": "Simple Current Datetime",
+    "SimpleTimer": "⛏️ Simple Timer",
+    "SimpleCurrentDatetime": "⛏️ Simple Current Datetime",
 }
