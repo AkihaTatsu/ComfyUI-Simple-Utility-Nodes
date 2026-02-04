@@ -1,8 +1,8 @@
 """
 ComfyUI Simple Utility Nodes
 
-A collection of simple utility nodes for ComfyUI including time-related
-and string manipulation nodes.
+A collection of simple utility nodes for ComfyUI including time-related,
+string manipulation, switch, script, and global variable nodes.
 """
 
 from .time_nodes import NODE_CLASS_MAPPINGS as TIME_NODE_CLASS_MAPPINGS
@@ -13,6 +13,8 @@ from .switch_nodes import NODE_CLASS_MAPPINGS as SWITCH_NODE_CLASS_MAPPINGS
 from .switch_nodes import NODE_DISPLAY_NAME_MAPPINGS as SWITCH_NODE_DISPLAY_NAME_MAPPINGS
 from .script_nodes import NODE_CLASS_MAPPINGS as SCRIPT_NODE_CLASS_MAPPINGS
 from .script_nodes import NODE_DISPLAY_NAME_MAPPINGS as SCRIPT_NODE_DISPLAY_NAME_MAPPINGS
+from .global_variable_nodes import NODE_CLASS_MAPPINGS as GLOBAL_VAR_NODE_CLASS_MAPPINGS
+from .global_variable_nodes import NODE_DISPLAY_NAME_MAPPINGS as GLOBAL_VAR_NODE_DISPLAY_NAME_MAPPINGS
 
 # Merge all node mappings
 NODE_CLASS_MAPPINGS = {
@@ -20,6 +22,7 @@ NODE_CLASS_MAPPINGS = {
     **STRING_NODE_CLASS_MAPPINGS,
     **SWITCH_NODE_CLASS_MAPPINGS,
     **SCRIPT_NODE_CLASS_MAPPINGS,
+    **GLOBAL_VAR_NODE_CLASS_MAPPINGS,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -27,6 +30,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **STRING_NODE_DISPLAY_NAME_MAPPINGS,
     **SWITCH_NODE_DISPLAY_NAME_MAPPINGS,
     **SCRIPT_NODE_DISPLAY_NAME_MAPPINGS,
+    **GLOBAL_VAR_NODE_DISPLAY_NAME_MAPPINGS,
 }
 
 WEB_DIRECTORY = "./web"

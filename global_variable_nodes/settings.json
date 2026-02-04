@@ -1,0 +1,8 @@
+{
+    "SimpleGlobalVariableInput": {
+        "default_variable_name": "my_variable"
+    },
+    "SimpleGlobalVariableOutput": {
+        "default_variable_name": "my_variable"
+    }
+}

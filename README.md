@@ -46,8 +46,8 @@ A timer for recording the running time of the workflow. The timer must be starte
   - `text description`: Human-readable format (e.g., "1 hour, 30 minutes, 45.123 seconds")
 
 **Outputs:**
-- `anything`: Passthrough of input
-- `time`: The formatted time string
+- `passthrough`: Passthrough of input
+- `time_string`: The formatted time string
 
 </details>
 
@@ -65,7 +65,7 @@ Retrieve the current date and time.
 - `custom_format`: Custom strftime format string
 
 **Outputs:**
-- `anything`: Passthrough of input
+- `passthrough`: Passthrough of input
 - `datetime_string`: Formatted datetime string
 
 **Available Formats:**
@@ -198,7 +198,7 @@ Print a message to the console with optional rich formatting and timestamp.
 - `message`: The message to print
 
 **Outputs:**
-- `anything`: Passthrough of input
+- `passthrough`: Passthrough of input
 
 </details>
 
@@ -216,7 +216,7 @@ Execute a Python script in an isolated environment.
 - `script`: The Python script to execute
 
 **Outputs:**
-- `anything`: Passthrough of input
+- `passthrough`: Passthrough of input
 - `RESULT`: Value of `RESULT` variable defined in script, or None if not defined
 
 **Usage:**
@@ -230,5 +230,73 @@ processed = str(data).upper()
 # Set RESULT to pass data to output
 RESULT = processed
 ```
+
+</details>
+
+### Global Variable Nodes
+
+These nodes allow you to pass data between disconnected parts of your workflow using named global variables, avoiding long connecting wires across the canvas.
+
+**⚠️ IMPORTANT: Execution Order**
+
+ComfyUI executes nodes based on their connections (topological sort). Since global variable nodes are designed to work without physical connections, you must ensure proper execution order by using the `trigger` input on the Output node.
+
+#### ⛏️ Simple Global Variable Input
+
+Store a value in a named global variable.
+
+<details>
+<summary>Details</summary>
+
+**Features:**
+- Data is stored by reference (like reroute nodes) to minimize RAM usage
+- Default color: Pale Blue (for easy identification)
+
+**Inputs:**
+- `anything`: The value to store (any data type)
+- `variable_name`: Name of the global variable
+
+**Outputs:**
+- `passthrough`: Passthrough of the input data
+
+</details>
+
+#### ⛏️ Simple Global Variable Output
+
+Retrieve a value from a named global variable.
+
+<details>
+<summary>Details</summary>
+
+**Features:**
+- Data is retrieved by reference (like reroute nodes) to minimize RAM usage
+- Uses lazy evaluation with `trigger` input to ensure proper execution order
+- Default color: Pale Blue (for easy identification)
+
+**Inputs:**
+- `variable_name`: Name of the global variable to retrieve (must match an input node)
+- `trigger` (optional but recommended): Connect to any output from a node that executes after the corresponding Input node
+
+**Outputs:**
+- `output`: The stored value
+
+**Usage Example:**
+```
+[Load Image] ──→ [Global Variable Input] ──→ [Some Processing Node]
+                  (name="my_image")                    │
+                                                       │ (any output)
+                                                       ▼
+[Global Variable Output] ◀── trigger ─────────────────────
+  (name="my_image")
+         │
+         ▼
+[Another Processing Node]
+```
+
+The `trigger` input creates an execution dependency, ensuring the Input node (and all its upstream nodes) execute before the Output node.
+
+</details>
+
+**Note:** An error will be raised if the variable doesn't exist. Make sure a "Simple Global Variable Input" node with the same `variable_name` exists in your workflow.
 
 </details>

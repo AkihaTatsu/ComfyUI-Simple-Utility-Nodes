@@ -23,7 +23,7 @@ class SimpleTimer:
     CATEGORY = "Simple Utility ⛏️/Time"
     FUNCTION = "execute"
     RETURN_TYPES = ("*", "STRING")
-    RETURN_NAMES = ("anything", "time")
+    RETURN_NAMES = ("passthrough", "time_string")
     OUTPUT_NODE = True
     
     @classmethod
@@ -86,7 +86,7 @@ class SimpleCurrentDatetime:
     CATEGORY = "Simple Utility ⛏️/Time"
     FUNCTION = "execute"
     RETURN_TYPES = ("*", "STRING")
-    RETURN_NAMES = ("anything", "datetime_string")
+    RETURN_NAMES = ("passthrough", "datetime_string")
     OUTPUT_NODE = True
     
     @classmethod

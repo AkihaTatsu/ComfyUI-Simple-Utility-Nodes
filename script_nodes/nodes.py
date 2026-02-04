@@ -18,7 +18,7 @@ class SimplePrintToConsole:
     CATEGORY = "Simple Utility ⛏️/Script"
     FUNCTION = "execute"
     RETURN_TYPES = ("*",)
-    RETURN_NAMES = ("anything",)
+    RETURN_NAMES = ("passthrough",)
     OUTPUT_NODE = True
     
     @classmethod
@@ -71,7 +71,7 @@ class SimplePythonScript:
     CATEGORY = "Simple Utility ⛏️/Script"
     FUNCTION = "execute"
     RETURN_TYPES = ("*", "*")
-    RETURN_NAMES = ("anything", "RESULT")
+    RETURN_NAMES = ("passthrough", "RESULT")
     OUTPUT_NODE = True
     
     @classmethod
