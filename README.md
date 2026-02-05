@@ -142,6 +142,65 @@ Split a string into two parts using a delimiter.
 
 </details>
 
+#### ⛏️ Simple Markdown String
+
+A markdown note node with rich text rendering and string output. Click the rendering area to edit, press ESC or click outside to render.
+
+<details>
+<summary>Details</summary>
+
+**Inputs:**
+- `text`: The markdown text to render
+
+**Outputs:**
+- `string`: The raw markdown text as a string output
+
+**Supported Features:**
+- **GitHub Flavored Markdown (GFM):**
+  - Headers (`#`, `##`, etc.)
+  - Bold (`**text**`), Italic (`*text*`), Strikethrough (`~~text~~`)
+  - Ordered and unordered lists
+  - Task lists (`- [ ]`, `- [x]`)
+  - Tables
+  - Code blocks with syntax highlighting
+  - Blockquotes
+  - Horizontal rules
+  - Links and images
+  - Inline HTML
+- **KaTeX Math:**
+  - Inline math: `$E = mc^2$`
+  - Block math: `$$\sum_{i=1}^{n} x_i$$`
+- **Emoji Shortcodes:**
+  - `:smile:` → 😄, `:rocket:` → 🚀, `:heart:` → ❤️, etc.
+
+**Usage:**
+1. Click the rendering area to enter text-editing mode
+2. Edit your markdown text
+3. Press **ESC** or click outside to exit editing and render the markdown
+
+</details>
+
+#### ⛏️ Simple Markdown String Display
+
+Display an input string as markdown-rendered rich text or raw text with passthrough output.
+
+<details>
+<summary>Details</summary>
+
+**Inputs:**
+- `string`: The string to display (must be provided as an input connection)
+- `display_raw_text`: Toggle between display modes
+  - `markdown` (False): Render the string as formatted markdown
+  - `raw text` (True): Display the raw string without markdown rendering
+
+**Outputs:**
+- `passthrough`: Passthrough of the input string
+
+**Supported Features (in markdown mode):**
+- Same as Simple Markdown String (GFM, KaTeX Math, Emoji Shortcodes)
+
+</details>
+
 ### Switch-Related Nodes
 
 #### ⛏️ Simple Switch with Random Mode

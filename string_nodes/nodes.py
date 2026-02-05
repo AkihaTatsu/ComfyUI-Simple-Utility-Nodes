@@ -2,7 +2,7 @@
 
 import json
 import os
-from typing import Tuple
+from typing import Any, Tuple
 
 from .utils import append_string, sever_string, wrap_string
 
@@ -129,11 +129,83 @@ class SimpleStringSevering:
         return (first_part, second_part)
 
 
+class SimpleMarkdownString:
+    """A markdown note node with text editing and rendering capabilities that outputs a string."""
+    
+    CATEGORY = "Simple Utility ⛏️/String"
+    FUNCTION = "execute"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("string",)
+    OUTPUT_NODE = True
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        settings = SETTINGS["SimpleMarkdownString"]
+        return {
+            "required": {
+                "text": ("STRING", {
+                    "default": settings["default_text"],
+                    "multiline": True
+                }),
+            }
+        }
+    
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        """Always execute to ensure UI updates."""
+        return float("nan")
+    
+    def execute(self, text: str) -> dict:
+        """Execute and return the markdown text as a string."""
+        return {
+            "ui": {"text": [text]},
+            "result": (text,)
+        }
+
+
+class SimpleMarkdownStringDisplay:
+    """Display an input string as markdown-rendered rich text or raw text."""
+    
+    CATEGORY = "Simple Utility ⛏️/String"
+    FUNCTION = "execute"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("passthrough",)
+    OUTPUT_NODE = True
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        settings = SETTINGS["SimpleMarkdownStringDisplay"]
+        return {
+            "required": {
+                "string": ("STRING", {"forceInput": True}),
+                "display_raw_text": ("BOOLEAN", {
+                    "default": settings["default_display_raw_text"],
+                    "label_on": "raw text",
+                    "label_off": "markdown"
+                }),
+            }
+        }
+    
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        """Always execute to ensure UI updates."""
+        return float("nan")
+    
+    def execute(self, string: str, display_raw_text: bool) -> dict:
+        """Execute and return the string with display mode info."""
+        return {
+            "ui": {"text": [string], "display_raw": [display_raw_text]},
+            "result": (string,)
+        }
+
+
 # Node class mappings
 NODE_CLASS_MAPPINGS = {
     "SimpleStringAppending": SimpleStringAppending,
     "SimpleStringWrapping": SimpleStringWrapping,
     "SimpleStringSevering": SimpleStringSevering,
+    "SimpleMarkdownString": SimpleMarkdownString,
+    "SimpleMarkdownStringDisplay": SimpleMarkdownStringDisplay,
 }
 
 # Display name mappings
@@ -141,4 +213,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SimpleStringAppending": "⛏️ Simple String Appending",
     "SimpleStringWrapping": "⛏️ Simple String Wrapping",
     "SimpleStringSevering": "⛏️ Simple String Severing",
+    "SimpleMarkdownString": "⛏️ Simple Markdown String",
+    "SimpleMarkdownStringDisplay": "⛏️ Simple Markdown String Display",
 }

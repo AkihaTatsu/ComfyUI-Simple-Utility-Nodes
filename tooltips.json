@@ -60,6 +60,25 @@
             "second_part": "The second part of the severed string (after the selected delimiter)."
         }
     },
+    "SimpleMarkdownString": {
+        "node": "A markdown note node with rich text rendering and string output. Click to edit, press ESC or click outside to render. Supports GitHub Flavored Markdown, KaTeX math, emojis, tables, code blocks, images, and more.",
+        "inputs": {
+            "text": "The markdown text to render. Supports GFM syntax including headers, bold, italic, strikethrough, lists, tables, code blocks, links, images, inline HTML, KaTeX math ($...$ for inline, $$...$$ for block), and :emoji_name: shortcodes."
+        },
+        "outputs": {
+            "string": "The raw markdown text as a string output."
+        }
+    },
+    "SimpleMarkdownStringDisplay": {
+        "node": "Display an input string as markdown-rendered rich text or raw text with passthrough output. Supports GitHub Flavored Markdown, KaTeX math, emojis, tables, code blocks, images, and more.",
+        "inputs": {
+            "string": "The string to display. Must be provided as an input connection.",
+            "display_raw_text": "Toggle between rendered markdown (off/False) and raw text display (on/True). Default is markdown rendering."
+        },
+        "outputs": {
+            "passthrough": "Passthrough of the input string."
+        }
+    },
     "SimpleSwitchWithRandomMode": {
         "node": "Select one input from multiple inputs with optional random selection. The number of visible input slots is controlled by input_num. An error will be raised if the selected input is not connected, or if random mode is enabled but no inputs are connected.",
         "inputs": {
