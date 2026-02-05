@@ -178,8 +178,8 @@ class SimpleMarkdownStringDisplay:
         return {
             "required": {
                 "string": ("STRING", {"forceInput": True}),
-                "display_raw_text": ("BOOLEAN", {
-                    "default": settings["default_display_raw_text"],
+                "display_mode": ("BOOLEAN", {
+                    "default": settings["default_display_mode"],
                     "label_on": "raw text",
                     "label_off": "markdown"
                 }),
@@ -191,10 +191,10 @@ class SimpleMarkdownStringDisplay:
         """Always execute to ensure UI updates."""
         return float("nan")
     
-    def execute(self, string: str, display_raw_text: bool) -> dict:
+    def execute(self, string: str, display_mode: bool) -> dict:
         """Execute and return the string with display mode info."""
         return {
-            "ui": {"text": [string], "display_raw": [display_raw_text]},
+            "ui": {"text": [string], "display_raw": [display_mode]},
             "result": (string,)
         }
 

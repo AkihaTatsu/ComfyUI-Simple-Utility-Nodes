@@ -73,7 +73,7 @@
         "node": "Display an input string as markdown-rendered rich text or raw text with passthrough output. Supports GitHub Flavored Markdown, KaTeX math, emojis, tables, code blocks, images, and more.",
         "inputs": {
             "string": "The string to display. Must be provided as an input connection.",
-            "display_raw_text": "Toggle between rendered markdown (off/False) and raw text display (on/True). Default is markdown rendering."
+            "display_mode": "Toggle between rendered markdown (off/False) and raw text display (on/True). Default is markdown rendering."
         },
         "outputs": {
             "passthrough": "Passthrough of the input string."

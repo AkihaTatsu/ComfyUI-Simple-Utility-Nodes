@@ -614,7 +614,7 @@ app.registerExtension({
                 this._lastDisplayText = "";
                 
                 // Listen for widget value changes to update display mode
-                const displayRawWidget = this.widgets?.find(w => w.name === "display_raw_text");
+                const displayRawWidget = this.widgets?.find(w => w.name === "display_mode");
                 if (displayRawWidget) {
                     const originalCallback = displayRawWidget.callback;
                     displayRawWidget.callback = (value) => {
@@ -631,7 +631,7 @@ app.registerExtension({
             nodeType.prototype._updateDisplay = function () {
                 if (!this.markdownWidget || !this._lastDisplayText) return;
                 
-                const displayRawWidget = this.widgets?.find(w => w.name === "display_raw_text");
+                const displayRawWidget = this.widgets?.find(w => w.name === "display_mode");
                 const displayRaw = displayRawWidget?.value ?? false;
                 
                 if (displayRaw) {

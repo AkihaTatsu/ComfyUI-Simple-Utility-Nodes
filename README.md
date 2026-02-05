@@ -189,7 +189,7 @@ Display an input string as markdown-rendered rich text or raw text with passthro
 
 **Inputs:**
 - `string`: The string to display (must be provided as an input connection)
-- `display_raw_text`: Toggle between display modes
+- `display_mode`: Toggle between display modes
   - `markdown` (False): Render the string as formatted markdown
   - `raw text` (True): Display the raw string without markdown rendering
 
