@@ -133,11 +133,12 @@
     "SimpleGlobalVariableInput": {
         "node": "Store a value in a named global variable. Use this to pass data between disconnected parts of your workflow without long connecting wires. The data is stored by reference (like reroute nodes) to minimize RAM usage. Variable name cannot be empty.",
         "inputs": {
-            "anything": "The value to store in the global variable. Any data type is accepted.",
-            "variable_name": "The name of the global variable. Use the same name in 'Simple Global Variable Output' to retrieve this value. Cannot be empty or whitespace only."
+            "INPUT": "The value to store in the global variable. Any data type is accepted. This value is stored by reference.",
+            "variable_name": "The name of the global variable. Use the same name in 'Simple Global Variable Output' to retrieve this value. Cannot be empty or whitespace only.",
+            "anything": "OPTIONAL: Passthrough input. Any data type is accepted and will be passed to the passthrough output. If not connected, the output will be None."
         },
         "outputs": {
-            "passthrough": "Passthrough of the input data. The same value is also stored in the global variable by reference."
+            "passthrough": "Passthrough of the 'anything' input data. Returns None if 'anything' is not connected."
         }
     },
     "SimpleGlobalVariableOutput": {
@@ -147,7 +148,7 @@
             "trigger": "OPTIONAL but RECOMMENDED: Connect this to any output from a node that executes after the corresponding Input node. This creates an execution dependency using lazy evaluation to ensure the Input node runs first. The actual value is ignored - only the connection matters."
         },
         "outputs": {
-            "output": "The value stored in the global variable, retrieved by reference."
+            "OUTPUT": "The value stored in the global variable, retrieved by reference."
         }
     }
 }

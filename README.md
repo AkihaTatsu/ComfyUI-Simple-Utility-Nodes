@@ -312,11 +312,12 @@ Store a value in a named global variable.
 - Default color: Pale Blue (for easy identification)
 
 **Inputs:**
-- `anything`: The value to store (any data type)
+- `INPUT`: The value to store in the global variable (any data type)
 - `variable_name`: Name of the global variable
+- `anything` (optional): Passthrough input (any data type)
 
 **Outputs:**
-- `passthrough`: Passthrough of the input data
+- `passthrough`: Passthrough of the `anything` input (None if not connected)
 
 </details>
 
@@ -337,7 +338,7 @@ Retrieve a value from a named global variable.
 - `trigger` (optional but recommended): Connect to any output from a node that executes after the corresponding Input node
 
 **Outputs:**
-- `output`: The stored value
+- `OUTPUT`: The stored value
 
 **Usage Example:**
 ```

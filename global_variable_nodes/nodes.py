@@ -1,8 +1,11 @@
 """Global variable custom nodes for ComfyUI.
 
 This module provides nodes for passing data between disconnected parts of a workflow
-using named global variables. The Input node stores values, and the Output node
-retrieves them. This avoids the need for long connecting wires across the canvas.
+using named global variables. The Input node stores its INPUT value, and the Output
+node retrieves it. This avoids the need for long connecting wires across the canvas.
+
+The Input node also has a passthrough 'anything' input (like other utility nodes)
+that passes data through unchanged, allowing it to be chained in workflows.
 
 Key optimization: These nodes use a pass-through pattern similar to reroute nodes,
 where the data is stored by reference rather than copied, minimizing RAM usage.
@@ -91,9 +94,12 @@ def list_global_variables() -> list[str]:
 class SimpleGlobalVariableInput:
     """Store a value in a named global variable.
     
-    This node accepts any input and stores it in a global variable with the
-    specified name. The data is stored by reference, not copied, to minimize
+    This node accepts an INPUT value and stores it in a global variable with
+    the specified name. The data is stored by reference, not copied, to minimize
     RAM usage (similar to reroute node optimization).
+    
+    Additionally, it has a passthrough 'anything' input (like other utility nodes)
+    that passes data through unchanged, allowing it to be chained in workflows.
     
     Use this with 'Simple Global Variable Output' to pass data between
     disconnected parts of your workflow without long connecting wires.
@@ -109,31 +115,35 @@ class SimpleGlobalVariableInput:
         settings = SETTINGS["SimpleGlobalVariableInput"]
         return {
             "required": {
-                "anything": ("*",),
+                "INPUT": ("*",),
                 "variable_name": ("STRING", {
                     "default": settings["default_variable_name"],
                     "multiline": False,
                 }),
             },
+            "optional": {
+                "anything": ("*",),
+            },
         }
     
     @classmethod
-    def VALIDATE_INPUTS(cls, anything, variable_name):
+    def VALIDATE_INPUTS(cls, INPUT, variable_name, anything=None):
         """Validate that variable_name is not empty."""
         if not variable_name or not variable_name.strip():
             return "Variable name cannot be empty."
         return True
     
-    def execute(self, anything: Any, variable_name: str) -> Tuple[Any]:
-        """Store the input value in the global variable.
+    def execute(self, INPUT: Any, variable_name: str, anything: Any = None) -> Tuple[Any]:
+        """Store the INPUT value in the global variable and pass through anything.
         
-        The value is stored by reference to minimize RAM usage.
+        The INPUT value is stored by reference to minimize RAM usage.
         This is the same optimization used by reroute nodes.
+        The 'anything' input is passed through unchanged (or None if not connected).
         """
-        # Store by reference - no copy is made
-        set_global_variable(variable_name.strip(), anything)
+        # Store INPUT by reference - no copy is made
+        set_global_variable(variable_name.strip(), INPUT)
         
-        # Pass through the input unchanged
+        # Pass through the 'anything' input unchanged (None if not connected)
         return (anything,)
 
 
@@ -160,7 +170,7 @@ class SimpleGlobalVariableOutput:
     CATEGORY = "Simple Utility ⛏️/Global Variable"
     FUNCTION = "execute"
     RETURN_TYPES = ("*",)
-    RETURN_NAMES = ("output",)
+    RETURN_NAMES = ("OUTPUT",)
     OUTPUT_NODE = False
     
     @classmethod
