@@ -84,25 +84,31 @@ def print_to_console(
 
 def execute_python_script(
     script: str,
-    input_value: Any = None
-) -> Tuple[Optional[Any], Optional[str]]:
+    input_values: Dict[str, Any] = None,
+    output_num: int = 1
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
     Execute a Python script in an isolated environment.
     
     Args:
         script: The Python script to execute.
-        input_value: The input value passed to the script as 'INPUT'.
+        input_values: Dictionary of input values (INPUT1, INPUT2, ...) passed to the script.
+        output_num: Number of outputs to collect (OUTPUT1, OUTPUT2, ...).
         
     Returns:
-        A tuple of (RESULT value or None, error message or None).
+        A tuple of (dict of output values or None, error message or None).
     """
     # Create an isolated namespace for the script
     script_globals: Dict[str, Any] = {
         "__builtins__": __builtins__,
         "__name__": "__script__",
         "__doc__": None,
-        "INPUT": input_value,
     }
+    
+    # Inject input variables
+    if input_values:
+        script_globals.update(input_values)
+    
     script_locals: Dict[str, Any] = {}
     
     # Capture stdout and stderr
@@ -118,8 +124,13 @@ def execute_python_script(
         # Execute the script
         exec(script, script_globals, script_locals)
         
-        # Check if RESULT is defined
-        result = script_locals.get("RESULT", script_globals.get("RESULT", None))
+        # Collect output variables
+        result_dict = {}
+        for i in range(1, output_num + 1):
+            output_key = f"OUTPUT{i}"
+            result_dict[output_key] = script_locals.get(
+                output_key, script_globals.get(output_key, None)
+            )
         
         # Print any captured output
         stdout_content = captured_stdout.getvalue()
@@ -133,7 +144,7 @@ def execute_python_script(
         if stderr_content:
             print(stderr_content, end="", file=sys.stderr)
         
-        return result, None
+        return result_dict, None
         
     except Exception as e:
         sys.stdout = old_stdout

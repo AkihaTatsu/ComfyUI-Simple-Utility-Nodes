@@ -66,26 +66,49 @@ class SimplePrintToConsole:
 
 
 class SimplePythonScript:
-    """Execute a Python script in an isolated environment."""
+    """Execute a Python script in an isolated environment with dynamic inputs/outputs."""
     
     CATEGORY = "Simple Utility ⛏️/Script"
     FUNCTION = "execute"
-    RETURN_TYPES = ("*", "*")
-    RETURN_NAMES = ("passthrough", "RESULT")
     OUTPUT_NODE = True
+    
+    # Get settings for this node
+    _settings = SETTINGS["SimplePythonScript"]
+    
+    # Dynamic return types - maximum possible outputs
+    RETURN_TYPES = tuple(["*"] * _settings["max_num"])
+    RETURN_NAMES = tuple([f"OUTPUT{i}" for i in range(1, _settings["max_num"] + 1)])
     
     @classmethod
     def INPUT_TYPES(cls):
         settings = SETTINGS["SimplePythonScript"]
-        return {
+        inputs = {
             "required": {
-                "INPUT": ("*",),
+                "input_num": ("INT", {
+                    "default": settings["default_input_num"],
+                    "min": settings["min_num"],
+                    "max": settings["max_num"],
+                    "step": 1
+                }),
+                "output_num": ("INT", {
+                    "default": settings["default_output_num"],
+                    "min": settings["min_num"],
+                    "max": settings["max_num"],
+                    "step": 1
+                }),
                 "script": ("STRING", {
                     "default": settings["default_script"],
                     "multiline": True
                 }),
-            }
+            },
+            "optional": {}
         }
+        
+        # Add dynamic inputs
+        for i in range(1, settings["max_num"] + 1):
+            inputs["optional"][f"INPUT{i}"] = ("*",)
+        
+        return inputs
     
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -94,18 +117,44 @@ class SimplePythonScript:
     
     def execute(
         self,
-        INPUT: Any,
-        script: str
+        input_num: int,
+        output_num: int,
+        script: str,
+        **kwargs
     ) -> dict:
-        """Execute the Python script."""
-        result, error = execute_python_script(script, INPUT)
+        """Execute the Python script with dynamic inputs/outputs."""
+        # Collect inputs based on input_num
+        input_values = {}
+        for i in range(1, input_num + 1):
+            key = f"INPUT{i}"
+            if key in kwargs:
+                input_values[key] = kwargs[key]
+            else:
+                input_values[key] = None
+        
+        result_dict, error = execute_python_script(script, input_values, output_num)
         
         if error:
             raise RuntimeError(f"Script execution failed:\n{error}")
         
+        # Build output tuple
+        max_num = SETTINGS["SimplePythonScript"]["max_num"]
+        outputs = []
+        for i in range(1, max_num + 1):
+            if i <= output_num:
+                outputs.append(result_dict.get(f"OUTPUT{i}", None))
+            else:
+                outputs.append(None)
+        
+        # Build UI message
+        output_summaries = []
+        for i in range(1, output_num + 1):
+            output_summaries.append(f"OUTPUT{i}: {repr(result_dict.get(f'OUTPUT{i}', None))}")
+        ui_text = "Script executed successfully. " + ", ".join(output_summaries)
+        
         return {
-            "ui": {"text": [f"Script executed successfully. RESULT: {repr(result)}"]},
-            "result": (INPUT, result)
+            "ui": {"text": [ui_text]},
+            "result": tuple(outputs)
         }
 
 

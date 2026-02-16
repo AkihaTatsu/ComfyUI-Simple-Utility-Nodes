@@ -263,7 +263,7 @@ Print a message to the console with optional rich formatting and timestamp.
 
 #### ⛏️ Simple Python Script
 
-Execute a Python script in an isolated environment.
+Execute a Python script in an isolated environment with dynamic inputs and outputs.
 
 **WARNING: This node uses Python's `exec()` function to execute arbitrary code. Only use scripts from trusted sources. Do not execute scripts from untrusted or unknown sources as they may contain malicious code that could compromise your system.**
 
@@ -271,23 +271,24 @@ Execute a Python script in an isolated environment.
 <summary>Details</summary>
 
 **Inputs:**
-- `INPUT`: Passthrough input, available in script as `INPUT` variable
+- `input_num`: Number of inputs to use (1-20)
+- `output_num`: Number of outputs to use (1-20)
 - `script`: The Python script to execute
+- `INPUT1` to `INPUT_N`: Input values (any data type). If an input is not connected, it is `None`.
 
 **Outputs:**
-- `passthrough`: Passthrough of input
-- `RESULT`: Value of `RESULT` variable defined in script, or None if not defined
+- `OUTPUT1` to `OUTPUT_N`: Output values. If an output variable is not assigned in the script, it is `None`.
 
 **Usage:**
 ```python
-# The input is available as INPUT
-data = INPUT
+# Inputs are available as INPUT1, INPUT2, ... variables (None if not connected)
+# Assign to OUTPUT1, OUTPUT2, ... to pass data to the outputs (None if not assigned)
 
-# Process data
+data = INPUT1
 processed = str(data).upper()
 
-# Set RESULT to pass data to output
-RESULT = processed
+OUTPUT1 = processed
+OUTPUT2 = len(processed) if processed else 0
 ```
 
 </details>

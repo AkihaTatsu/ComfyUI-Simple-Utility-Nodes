@@ -5,6 +5,10 @@
         "default_message": ""
     },
     "SimplePythonScript": {
-        "default_script": "# Write your Python script here\n# The input is available as 'INPUT' variable\n# Define 'RESULT' variable to pass data to the output\n\nRESULT = None"
+        "default_script": "# Write your Python script here\n# Inputs are available as INPUT1, INPUT2, ... variables (None if not connected)\n# Assign to OUTPUT1, OUTPUT2, ... to pass data to the outputs (None if not assigned)\n\nOUTPUT1 = INPUT1",
+        "default_input_num": 1,
+        "default_output_num": 1,
+        "min_num": 1,
+        "max_num": 20
     }
 }
