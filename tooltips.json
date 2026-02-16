@@ -122,7 +122,7 @@
     "SimplePythonScript": {
         "node": "Execute a Python script in an isolated environment. The input is available as 'INPUT' variable. WARNING: Uses exec() to execute arbitrary code. Only use scripts from trusted sources. Always executes to ensure script runs.",
         "inputs": {
-            "anything": "Passthrough input. Available in the script as the 'INPUT' variable and passed to the passthrough output.",
+            "INPUT": "Passthrough input. Available in the script as the 'INPUT' variable and passed to the passthrough output.",
             "script": "The Python script to execute. Define a 'RESULT' variable to pass data to the output. Supports multiline text. An error will be raised if script execution fails."
         },
         "outputs": {

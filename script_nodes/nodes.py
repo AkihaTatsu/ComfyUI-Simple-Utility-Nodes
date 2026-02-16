@@ -79,7 +79,7 @@ class SimplePythonScript:
         settings = SETTINGS["SimplePythonScript"]
         return {
             "required": {
-                "anything": ("*",),
+                "INPUT": ("*",),
                 "script": ("STRING", {
                     "default": settings["default_script"],
                     "multiline": True
@@ -94,18 +94,18 @@ class SimplePythonScript:
     
     def execute(
         self,
-        anything: Any,
+        INPUT: Any,
         script: str
     ) -> dict:
         """Execute the Python script."""
-        result, error = execute_python_script(script, anything)
+        result, error = execute_python_script(script, INPUT)
         
         if error:
             raise RuntimeError(f"Script execution failed:\n{error}")
         
         return {
             "ui": {"text": [f"Script executed successfully. RESULT: {repr(result)}"]},
-            "result": (anything, result)
+            "result": (INPUT, result)
         }
 
 

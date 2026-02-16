@@ -271,7 +271,7 @@ Execute a Python script in an isolated environment.
 <summary>Details</summary>
 
 **Inputs:**
-- `anything`: Passthrough input, available in script as `INPUT` variable
+- `INPUT`: Passthrough input, available in script as `INPUT` variable
 - `script`: The Python script to execute
 
 **Outputs:**
