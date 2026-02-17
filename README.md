@@ -144,7 +144,7 @@ Split a string into two parts using a delimiter.
 
 #### ⛏️ Simple Markdown String
 
-A markdown note node with rich text rendering and string output. Click the rendering area to edit, press ESC or click outside to render.
+A markdown note node with click-to-edit rich text rendering and string output. Click the rendered markdown to edit the raw text; press ESC or click elsewhere to re-render.
 
 <details>
 <summary>Details</summary>
@@ -162,21 +162,22 @@ A markdown note node with rich text rendering and string output. Click the rende
   - Ordered and unordered lists
   - Task lists (`- [ ]`, `- [x]`)
   - Tables
-  - Code blocks with syntax highlighting
+  - Code blocks
   - Blockquotes
   - Horizontal rules
-  - Links and images
+  - Links and images (`![alt](url)`)
   - Inline HTML
-- **KaTeX Math:**
+- **KaTeX Math Formulae:**
   - Inline math: `$E = mc^2$`
   - Block math: `$$\sum_{i=1}^{n} x_i$$`
 - **Emoji Shortcodes:**
   - `:smile:` → 😄, `:rocket:` → 🚀, `:heart:` → ❤️, etc.
+- **Images:**
+  - Standard markdown images: `![alt text](image_url)`
 
-**Usage:**
-1. Click the rendering area to enter text-editing mode
-2. Edit your markdown text
-3. Press **ESC** or click outside to exit editing and render the markdown
+**Editing Behaviour:**
+- **Click** the rendered markdown to switch to the raw text editor
+- **Press ESC** or **click elsewhere** to re-render the markdown
 
 </details>
 
@@ -197,7 +198,7 @@ Display an input string as markdown-rendered rich text or raw text with passthro
 - `passthrough`: Passthrough of the input string
 
 **Supported Features (in markdown mode):**
-- Same as Simple Markdown String (GFM, KaTeX Math, Emoji Shortcodes)
+- Same as Simple Markdown String (GFM, KaTeX Math Formulae, Emoji Shortcodes, Images)
 
 </details>
 

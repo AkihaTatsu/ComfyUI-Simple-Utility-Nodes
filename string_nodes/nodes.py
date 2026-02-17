@@ -130,14 +130,20 @@ class SimpleStringSevering:
 
 
 class SimpleMarkdownString:
-    """A markdown note node with text editing and rendering capabilities that outputs a string."""
-    
+    """A markdown note node with click-to-edit behavior and string output.
+
+    Displays rendered markdown by default. Single-click the rendered view
+    to switch to a raw text editor. Click elsewhere or press ESC to
+    re-render the markdown. Supports KaTeX math, emoji shortcodes,
+    and images via the frontend extension.
+    """
+
     CATEGORY = "Simple Utility ⛏️/String"
     FUNCTION = "execute"
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("string",)
     OUTPUT_NODE = True
-    
+
     @classmethod
     def INPUT_TYPES(cls):
         settings = SETTINGS["SimpleMarkdownString"]
@@ -149,29 +155,35 @@ class SimpleMarkdownString:
                 }),
             }
         }
-    
+
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         """Always execute to ensure UI updates."""
         return float("nan")
-    
+
     def execute(self, text: str) -> dict:
         """Execute and return the markdown text as a string."""
         return {
-            "ui": {"text": [text]},
+            "ui": {"text": (text,)},
             "result": (text,)
         }
 
 
 class SimpleMarkdownStringDisplay:
-    """Display an input string as markdown-rendered rich text or raw text."""
-    
+    """Display an input string as markdown-rendered rich text or raw text.
+
+    Uses the same preview pattern as ComfyUI's PreviewAny node:
+    two preview widgets (markdown and plaintext) with a toggle switch.
+    The markdown preview is enhanced with KaTeX math, emoji shortcodes,
+    and image support.
+    """
+
     CATEGORY = "Simple Utility ⛏️/String"
     FUNCTION = "execute"
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("passthrough",)
     OUTPUT_NODE = True
-    
+
     @classmethod
     def INPUT_TYPES(cls):
         settings = SETTINGS["SimpleMarkdownStringDisplay"]
@@ -185,16 +197,16 @@ class SimpleMarkdownStringDisplay:
                 }),
             }
         }
-    
+
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         """Always execute to ensure UI updates."""
         return float("nan")
-    
+
     def execute(self, string: str, display_mode: bool) -> dict:
         """Execute and return the string with display mode info."""
         return {
-            "ui": {"text": [string], "display_raw": [display_mode]},
+            "ui": {"text": (string,)},
             "result": (string,)
         }
 

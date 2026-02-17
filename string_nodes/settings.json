@@ -14,7 +14,7 @@
         "default_delimiter_index": 0
     },
     "SimpleMarkdownString": {
-        "default_text": "# Markdown String\n\nClick to edit. Press **ESC** or click outside to render.\n\n- Supports **bold**, *italic*, ~~strikethrough~~\n- Math: $E = mc^2$\n- Emojis: :smile: :rocket:\n- Tables, code blocks, and more!"
+        "default_text": "# Markdown String\n\nEdit this text. Supports **bold**, *italic*, ~~strikethrough~~.\n\n- Math: $E = mc^2$\n- Emojis: :smile: :rocket:\n- Images: `![alt](url)`\n- Tables, code blocks, and more!"
     },
     "SimpleMarkdownStringDisplay": {
         "default_display_mode": false

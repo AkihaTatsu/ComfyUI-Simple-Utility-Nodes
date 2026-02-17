@@ -61,7 +61,7 @@
         }
     },
     "SimpleMarkdownString": {
-        "node": "A markdown note node with rich text rendering and string output. Click to edit, press ESC or click outside to render. Supports GitHub Flavored Markdown, KaTeX math, emojis, tables, code blocks, images, and more.",
+        "node": "A markdown note node with click-to-edit rich text rendering and string output. Click the rendered markdown to edit, press ESC or click elsewhere to re-render. Supports GitHub Flavored Markdown, KaTeX math formulae, emoji shortcodes, images, tables, code blocks, and more.",
         "inputs": {
             "text": "The markdown text to render. Supports GFM syntax including headers, bold, italic, strikethrough, lists, tables, code blocks, links, images, inline HTML, KaTeX math ($...$ for inline, $$...$$ for block), and :emoji_name: shortcodes."
         },
@@ -70,7 +70,7 @@
         }
     },
     "SimpleMarkdownStringDisplay": {
-        "node": "Display an input string as markdown-rendered rich text or raw text with passthrough output. Supports GitHub Flavored Markdown, KaTeX math, emojis, tables, code blocks, images, and more.",
+        "node": "Display an input string as markdown-rendered rich text or raw text with passthrough output. Uses the PreviewAny-style dual preview (markdown / plaintext toggle). The markdown view supports GitHub Flavored Markdown, KaTeX math formulae, emoji shortcodes, images, tables, code blocks, and more.",
         "inputs": {
             "string": "The string to display. Must be provided as an input connection.",
             "display_mode": "Toggle between rendered markdown (off/False) and raw text display (on/True). Default is markdown rendering."
