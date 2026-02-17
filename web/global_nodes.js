@@ -2,7 +2,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 app.registerExtension({
-    name: "SimpleUtility.GlobalVariableNodes",
+    name: "SimpleUtility.GlobalNodes",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         // Apply pale_blue color to both global variable nodes
         if (nodeData.name === "SimpleGlobalVariableInput" || 

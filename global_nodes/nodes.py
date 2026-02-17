@@ -105,7 +105,7 @@ class SimpleGlobalVariableInput:
     disconnected parts of your workflow without long connecting wires.
     """
     
-    CATEGORY = "Simple Utility ⛏️/Global Variable"
+    CATEGORY = "Simple Utility ⛏️/Global"
     FUNCTION = "execute"
     RETURN_TYPES = ("*",)
     RETURN_NAMES = ("passthrough",)
@@ -167,7 +167,7 @@ class SimpleGlobalVariableOutput:
     [Another Processing]
     """
     
-    CATEGORY = "Simple Utility ⛏️/Global Variable"
+    CATEGORY = "Simple Utility ⛏️/Global"
     FUNCTION = "execute"
     RETURN_TYPES = ("*",)
     RETURN_NAMES = ("OUTPUT",)

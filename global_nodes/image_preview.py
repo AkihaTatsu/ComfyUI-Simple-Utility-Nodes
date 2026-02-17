@@ -366,7 +366,7 @@ class SimpleGlobalImagePreview:
     The node does **not** send images to the ComfyUI image feed.
     """
 
-    CATEGORY = "Simple Utility ⛏️/Global Variable"
+    CATEGORY = "Simple Utility ⛏️/Global"
     FUNCTION = "execute"
     RETURN_TYPES = ()
     OUTPUT_NODE = True

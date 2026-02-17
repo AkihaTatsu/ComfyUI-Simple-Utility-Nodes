@@ -2,12 +2,23 @@ import { app } from "../../scripts/app.js";
 import { ComfyWidgets } from "../../scripts/widgets.js";
 
 // ============================================================================
-// Library loading (KaTeX, marked, DOMPurify)
+// Library loading (KaTeX, marked, DOMPurify) — with local fallback
 // ============================================================================
 
 let librariesLoaded = false;
 let librariesLoading = false;
 const libraryLoadCallbacks = [];
+
+// Base path for local backup copies served by ComfyUI's static extension route
+const BACKUP_BASE = "extensions/ComfyUI-Simple-Utility-Nodes/backups";
+
+// CDN URLs and their local backup filenames
+const CDN_RESOURCES = {
+    "katex_css":  { cdn: "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css",       file: "katex.min.css"  },
+    "katex_js":   { cdn: "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js",        file: "katex.min.js"   },
+    "marked_js":  { cdn: "https://cdn.jsdelivr.net/npm/marked@14.1.4/marked.min.js",            file: "marked.min.js"  },
+    "purify_js":  { cdn: "https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js",     file: "purify.min.js"  },
+};
 
 async function loadLibraries() {
     if (librariesLoaded) return;
@@ -17,15 +28,12 @@ async function loadLibraries() {
     librariesLoading = true;
     try {
         // KaTeX CSS
-        const katexCss = document.createElement("link");
-        katexCss.rel = "stylesheet";
-        katexCss.href = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css";
-        katexCss.crossOrigin = "anonymous";
-        document.head.appendChild(katexCss);
+        await loadStylesheet(CDN_RESOURCES.katex_css);
 
-        await loadScript("https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js");
-        await loadScript("https://cdn.jsdelivr.net/npm/marked@14.1.4/marked.min.js");
-        await loadScript("https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js");
+        // JS libraries — order matters (katex first)
+        await loadScript(CDN_RESOURCES.katex_js);
+        await loadScript(CDN_RESOURCES.marked_js);
+        await loadScript(CDN_RESOURCES.purify_js);
 
         librariesLoaded = true;
         libraryLoadCallbacks.forEach(cb => cb());
@@ -37,15 +45,74 @@ async function loadLibraries() {
     }
 }
 
-function loadScript(url) {
+/**
+ * Load a <link rel="stylesheet"> — try CDN first, fall back to local backup.
+ */
+function loadStylesheet(res) {
     return new Promise((resolve, reject) => {
-        const existing = document.querySelector(`script[src="${url}"]`);
+        // Already present?
+        const existing = document.querySelector(`link[href="${res.cdn}"], link[data-backup-for="${res.file}"]`);
         if (existing) { resolve(); return; }
+
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.crossOrigin = "anonymous";
+
+        function tryLocal() {
+            const localLink = document.createElement("link");
+            localLink.rel = "stylesheet";
+            localLink.href = `${BACKUP_BASE}/${res.file}`;
+            localLink.setAttribute("data-backup-for", res.file);
+            localLink.onload = () => {
+                console.info(`[SimpleMarkdown] Loaded local backup CSS: ${res.file}`);
+                resolve();
+            };
+            localLink.onerror = () => reject(new Error(`Failed to load CSS from both CDN and local backup: ${res.file}`));
+            document.head.appendChild(localLink);
+        }
+
+        link.href = res.cdn;
+        link.onload = resolve;
+        link.onerror = () => {
+            console.warn(`[SimpleMarkdown] CDN CSS failed, trying local backup: ${res.file}`);
+            link.remove();
+            tryLocal();
+        };
+        document.head.appendChild(link);
+    });
+}
+
+/**
+ * Load a <script> — try CDN first, fall back to local backup.
+ */
+function loadScript(res) {
+    return new Promise((resolve, reject) => {
+        // Already loaded?
+        const existing = document.querySelector(`script[src="${res.cdn}"], script[data-backup-for="${res.file}"]`);
+        if (existing) { resolve(); return; }
+
         const script = document.createElement("script");
-        script.src = url;
         script.crossOrigin = "anonymous";
+
+        function tryLocal() {
+            const localScript = document.createElement("script");
+            localScript.src = `${BACKUP_BASE}/${res.file}`;
+            localScript.setAttribute("data-backup-for", res.file);
+            localScript.onload = () => {
+                console.info(`[SimpleMarkdown] Loaded local backup JS: ${res.file}`);
+                resolve();
+            };
+            localScript.onerror = () => reject(new Error(`Failed to load JS from both CDN and local backup: ${res.file}`));
+            document.head.appendChild(localScript);
+        }
+
+        script.src = res.cdn;
         script.onload = resolve;
-        script.onerror = reject;
+        script.onerror = () => {
+            console.warn(`[SimpleMarkdown] CDN JS failed, trying local backup: ${res.file}`);
+            script.remove();
+            tryLocal();
+        };
         document.head.appendChild(script);
     });
 }

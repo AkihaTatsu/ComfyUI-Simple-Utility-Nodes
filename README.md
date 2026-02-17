@@ -1,6 +1,6 @@
 # ComfyUI Simple Utility Nodes
 
-A collection of simple utility nodes for ComfyUI including time-related, string manipulation, switch, and script nodes.
+A collection of simple utility nodes for ComfyUI including time-related, string manipulation, switch, script, and global nodes.
 
 ## Installation
 
@@ -294,17 +294,17 @@ OUTPUT2 = len(processed) if processed else 0
 
 </details>
 
-### Global Variable Nodes
+### Global Nodes
 
-These nodes allow you to pass data between disconnected parts of your workflow using named global variables, avoiding long connecting wires across the canvas.
+Global nodes provide workflow-wide functionality including passing data between disconnected nodes using named variables, and monitoring all preview images across the workflow.
 
-**⚠️ IMPORTANT: Execution Order**
+**⚠️ IMPORTANT: Execution Order (for Global Variable nodes)**
 
 ComfyUI executes nodes based on their connections (topological sort). Since global variable nodes are designed to work without physical connections, you must ensure proper execution order by using the `trigger` input on the Output node.
 
 #### ⛏️ Simple Global Variable Input
 
-Store a value in a named global variable.
+Store a value in a named global variable. Part of the Global Nodes group.
 
 <details>
 <summary>Details</summary>
@@ -325,7 +325,7 @@ Store a value in a named global variable.
 
 #### ⛏️ Simple Global Variable Output
 
-Retrieve a value from a named global variable.
+Retrieve a value from a named global variable. Part of the Global Nodes group.
 
 <details>
 <summary>Details</summary>

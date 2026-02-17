@@ -1,4 +1,4 @@
-"""Global variable nodes for ComfyUI."""
+"""Global nodes for ComfyUI."""
 
 from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 from .image_preview import (

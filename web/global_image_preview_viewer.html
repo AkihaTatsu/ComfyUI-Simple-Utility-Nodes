@@ -182,8 +182,11 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            overflow: auto;
+            overflow: hidden;
             position: relative;
+        }
+        main.scrollable {
+            overflow: auto;
         }
 
         #imageContainer {
@@ -196,15 +199,34 @@
         }
 
         #previewImage {
+            image-rendering: auto;
+            /* default: no special sizing — applyFit() sets inline styles + class */
+        }
+
+        /*  Contain  — shrink if too big, otherwise stay at natural size, centered */
+        #previewImage.fit-contain {
             max-width: 100%;
             max-height: 100%;
+            width: auto;
+            height: auto;
             object-fit: contain;
-            image-rendering: auto;
         }
-        #previewImage.cover  { object-fit: cover; }
-        #previewImage.actual {
+
+        /*  Fill  — always stretch to fill viewport (no crop) */
+        #previewImage.fit-fill {
+            width: 100%;
+            height: 100%;
             max-width: none;
             max-height: none;
+            object-fit: contain;
+        }
+
+        /*  Actual Size  — natural size, scroll to view */
+        #previewImage.fit-actual {
+            max-width: none;
+            max-height: none;
+            width: auto;
+            height: auto;
             object-fit: none;
             cursor: grab;
         }
@@ -301,7 +323,7 @@
             Fit
             <select id="fitMode">
                 <option value="contain">Contain</option>
-                <option value="cover">Cover</option>
+                <option value="fill">Fill</option>
                 <option value="actual">Actual Size</option>
             </select>
         </label>
@@ -393,9 +415,18 @@
 
     function applyFit() {
         const mode = fitMode.value;
-        img.classList.remove('cover', 'actual');
-        if (mode === 'cover')       img.classList.add('cover');
-        else if (mode === 'actual') img.classList.add('actual');
+        img.classList.remove('fit-contain', 'fit-fill', 'fit-actual');
+        main.classList.remove('scrollable');
+
+        if (mode === 'fill') {
+            img.classList.add('fit-fill');
+        } else if (mode === 'actual') {
+            img.classList.add('fit-actual');
+            main.classList.add('scrollable');
+        } else {
+            /* contain (default) — shrink-only */
+            img.classList.add('fit-contain');
+        }
     }
 
     /* ── History ── */
@@ -435,7 +466,7 @@
     let isDragging = false, startX, startY, scrollL, scrollT;
     const main = document.querySelector('main');
     img.addEventListener('mousedown', (e) => {
-        if (!img.classList.contains('actual')) return;
+        if (!img.classList.contains('fit-actual')) return;
         isDragging = true;
         img.classList.add('dragging');
         startX = e.clientX; startY = e.clientY;
@@ -476,7 +507,12 @@
             wfNode.textContent = '';
         }
 
-        rerunBtn.disabled = rerunInFlight;
+        // While a rerun is in-flight, check if the new prompt has started
+        if (rerunInFlight && checkRerunConfirmed(status)) {
+            resetRerun();   // confirmed — re-enable the button
+        } else {
+            rerunBtn.disabled = rerunInFlight;
+        }
     }
 
     /* ═══════════════════════════════════════════════════════
@@ -502,51 +538,72 @@
         if (!rerunInFlight) rerunBtn.textContent = LABELS[getMode()] || LABELS.same;
     });
 
+    // ── Rerun confirmation state ──
+    // After sending a rerun command we watch /status polls for a NEW
+    // prompt_id (different from the one captured before clicking).
+    // If nothing changes within RETRY_INTERVAL_MS we resend the command.
+    let _rerunPrePromptId  = null;   // prompt_id captured before click
+    let _rerunRetries      = 0;
+    const RETRY_INTERVAL_MS = 3000;
+    const MAX_RETRIES       = 20;
+    let _retryTimer         = null;
+    let _rerunNewTaskAcked  = false;  // tracks if BroadcastChannel ack arrived
+
     // Listen for ack from main tab (New Task mode)
     if (bc) {
         bc.onmessage = (ev) => {
             if (ev.data?.type === 'rerun_new_task_ack') {
-                if (!ev.data.ok) console.warn('New Task rerun failed:', ev.data.error);
-                finishRerun();
+                _rerunNewTaskAcked = true;
+                if (!ev.data.ok) {
+                    console.warn('New Task rerun failed:', ev.data.error);
+                    resetRerun();            // give up on error
+                }
+                // On success the ack just means the command was sent;
+                // we still wait for the poll loop to confirm the new prompt_id.
             }
         };
     }
 
-    function finishRerun() {
-        setTimeout(() => {
-            rerunInFlight = false;
-            rerunBtn.disabled = false;
-            rerunBtn.textContent = LABELS[getMode()] || LABELS.same;
-        }, 600);
+    /**
+     * Called from the poll loop (updateWorkflowStatus) every 300 ms.
+     * Returns true when the new workflow is confirmed started so the
+     * caller knows the button can be re-enabled.
+     */
+    function checkRerunConfirmed(status) {
+        if (!rerunInFlight) return false;
+        if (!status) return false;
+        // A different prompt_id means a new prompt has been picked up.
+        if (status.prompt_id && status.prompt_id !== _rerunPrePromptId) {
+            return true;
+        }
+        return false;
     }
 
-    rerunBtn.addEventListener('click', async () => {
-        if (rerunInFlight) return;
-        rerunInFlight = true;
-        rerunBtn.disabled = true;
-        rerunBtn.textContent = '⟳ Rerunning…';
+    /** Fully reset the rerun button to its idle state. */
+    function resetRerun() {
+        clearTimeout(_retryTimer);
+        _retryTimer = null;
+        _rerunRetries = 0;
+        _rerunNewTaskAcked = false;
+        rerunInFlight = false;
+        rerunBtn.disabled = false;
+        rerunBtn.textContent = LABELS[getMode()] || LABELS.same;
+    }
 
+    /** Fire (or re-fire) the actual rerun command for the current mode. */
+    async function sendRerunCommand() {
         const mode = getMode();
 
         if (mode === 'new') {
-            /* ── New Task: ask the main ComfyUI tab via BroadcastChannel ── */
-            if (!bc) {
-                console.warn('BroadcastChannel not available');
-                finishRerun();
-                return;
-            }
-            // Check if workflow is running → need to interrupt first
+            if (!bc) { console.warn('BroadcastChannel not available'); resetRerun(); return; }
             let running = false;
             try {
                 const sr = await fetch('/simple_utility/global_image_preview/status');
                 if (sr.ok) { running = (await sr.json()).running; }
             } catch(e) {}
+            _rerunNewTaskAcked = false;
             bc.postMessage({ type: 'rerun_new_task', interrupt: running });
-            // finishRerun() will be called when we receive the ack
-            // Timeout fallback in case main tab is not open
-            setTimeout(() => { if (rerunInFlight) finishRerun(); }, 5000);
         } else {
-            /* ── Same Task: POST to server /rerun endpoint ── */
             try {
                 const resp = await fetch('/simple_utility/global_image_preview/rerun', {
                     method: 'POST',
@@ -554,12 +611,51 @@
                     body: '{}',
                 });
                 const data = await resp.json();
-                if (!resp.ok) console.warn('Rerun failed:', data.error);
+                if (!resp.ok) { console.warn('Rerun failed:', data.error); resetRerun(); return; }
             } catch(e) {
-                console.warn('Rerun request error:', e);
+                console.warn('Rerun request error:', e); resetRerun(); return;
             }
-            finishRerun();
         }
+
+        // Schedule a retry if the status hasn't changed in time
+        scheduleRetry();
+    }
+
+    /** Schedule an auto-retry timer. */
+    function scheduleRetry() {
+        clearTimeout(_retryTimer);
+        _retryTimer = setTimeout(async () => {
+            if (!rerunInFlight) return;
+            _rerunRetries++;
+            if (_rerunRetries >= MAX_RETRIES) {
+                console.warn(`Rerun: gave up after ${MAX_RETRIES} retries`);
+                resetRerun();
+                return;
+            }
+            console.log(`Rerun: no status change detected, retrying (${_rerunRetries}/${MAX_RETRIES})…`);
+            rerunBtn.textContent = `⟳ Retrying (${_rerunRetries}/${MAX_RETRIES})…`;
+            await sendRerunCommand();
+        }, RETRY_INTERVAL_MS);
+    }
+
+    rerunBtn.addEventListener('click', async () => {
+        if (rerunInFlight) return;
+        rerunInFlight = true;
+        rerunBtn.disabled = true;
+        rerunBtn.textContent = '⟳ Sending…';
+        _rerunRetries = 0;
+
+        // Capture the current prompt_id BEFORE sending the command
+        try {
+            const sr = await fetch('/simple_utility/global_image_preview/status');
+            if (sr.ok) {
+                const st = await sr.json();
+                _rerunPrePromptId = st.prompt_id;
+            }
+        } catch(e) { _rerunPrePromptId = null; }
+
+        rerunBtn.textContent = '⟳ Waiting…';
+        await sendRerunCommand();
     });
 
     /* ═══════════════════════════════════════════════════════
@@ -616,7 +712,7 @@
     }
 
     /* ── Init ── */
-    connDot.classList.remove('disconnected');
+    connDot.classList.add('disconnected');   // start as red until first successful poll
     pollLoop();
 })();
 </script>
