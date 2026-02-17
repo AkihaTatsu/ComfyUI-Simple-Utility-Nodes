@@ -68,8 +68,15 @@ _workflow_running: bool = False
 _current_node_id: str | None = None
 _current_node_class: str | None = None
 _current_prompt_id: str | None = None
-_last_prompt: dict | None = None  # the full prompt dict for requeue
-_last_extra_data: dict | None = None
+_user_prompt: dict | None = None       # original user prompt, NEVER overwritten by reruns
+_user_extra_data: dict | None = None
+
+# Guard: True while any rerun (same or new) is in-flight so that
+# _patched_put does not overwrite _user_prompt with rerun data.
+_rerun_in_progress: bool = False
+
+# Tracks the last successfully queued rerun_id for per-tab confirmation.
+_last_rerun_id: str | None = None
 
 
 def _set_workflow_executing(node_id: str | None, prompt_id: str | None,
@@ -89,11 +96,11 @@ def _set_workflow_executing(node_id: str | None, prompt_id: str | None,
                 _current_node_class = node_class
 
 
-def _set_last_prompt(prompt: dict, extra_data: dict | None = None) -> None:
-    global _last_prompt, _last_extra_data
+def _set_user_prompt(prompt: dict, extra_data: dict | None = None) -> None:
+    global _user_prompt, _user_extra_data
     with _workflow_status_lock:
-        _last_prompt = prompt
-        _last_extra_data = extra_data
+        _user_prompt = prompt
+        _user_extra_data = extra_data
 
 
 def get_workflow_status() -> dict:
@@ -103,7 +110,8 @@ def get_workflow_status() -> dict:
             "current_node_id": _current_node_id,
             "current_node_class": _current_node_class,
             "prompt_id": _current_prompt_id,
-            "has_last_prompt": _last_prompt is not None,
+            "has_last_prompt": _user_prompt is not None,
+            "last_rerun_id": _last_rerun_id,
         }
 
 
@@ -157,8 +165,8 @@ def _install_server_hook() -> None:
                     try:
                         status = get_workflow_status()
                         pid = prompt_id or status.get("prompt_id")
-                        if pid and _last_prompt:
-                            node_info = _last_prompt.get(node_id) or _last_prompt.get(display_node)
+                        if pid and _user_prompt:
+                            node_info = _user_prompt.get(node_id) or _user_prompt.get(display_node)
                             if node_info and isinstance(node_info, dict):
                                 node_class = node_info.get("class_type")
                     except Exception:
@@ -208,18 +216,164 @@ def _install_server_hook() -> None:
 
     server.send_sync = _patched_send_sync
 
-    # Also hook prompt_queue.put to capture prompt data for rerun
+    # Also hook prompt_queue.put to capture prompt data for rerun.
+    # When _rerun_in_progress is True we skip overwriting _user_prompt so
+    # that the original user prompt is preserved for future reruns.
     _orig_put = server.prompt_queue.put
     def _patched_put(item):
         try:
-            # item is (number, prompt_id, prompt, extra_data, outputs_to_execute, sensitive)
-            if item and len(item) >= 4:
+            if item and len(item) >= 4 and not _rerun_in_progress:
                 import copy
-                _set_last_prompt(copy.deepcopy(item[2]), copy.deepcopy(item[3]))
+                _set_user_prompt(copy.deepcopy(item[2]), copy.deepcopy(item[3]))
         except Exception:
             pass
         return _orig_put(item)
     server.prompt_queue.put = _patched_put
+
+
+# ---------------------------------------------------------------------------
+# Rerun helpers
+# ---------------------------------------------------------------------------
+
+_SEED_INPUT_KEYS = {"seed", "noise_seed"}
+
+
+def _apply_control_after_generate(prompt: dict, extra_data: dict) -> None:
+    """Apply per-widget ``control_after_generate`` rules to seed inputs.
+
+    Inspects ``extra_data['extra_pnginfo']['workflow']['nodes']`` to discover
+    which nodes have seed widgets with a companion ``control_after_generate``
+    combo widget.  For each such node the corresponding seed value in *prompt*
+    is mutated according to the rule:
+
+    - ``"randomize"`` → random 64-bit integer
+    - ``"increment"`` → current value + 1  (wraps at 2^64)
+    - ``"decrement"`` → current value − 1  (wraps at 0)
+    - ``"fixed"``     → no change
+
+    If no workflow metadata is available, falls back to randomising every
+    ``seed`` / ``noise_seed`` input unconditionally.
+    """
+    import random
+
+    MAX_SEED = 0xFFFFFFFFFFFFFFFF
+
+    # Try to extract node metadata from the workflow
+    workflow_nodes: list | None = None
+    try:
+        workflow_nodes = extra_data["extra_pnginfo"]["workflow"]["nodes"]
+    except (KeyError, TypeError):
+        pass
+
+    if workflow_nodes:
+        # Build a mapping:  node_id_str → control_after_generate action
+        # by inspecting widgets_values for each workflow node.
+        #
+        # Convention: for each seed/noise_seed INT input declared with
+        # control_after_generate=True, the frontend inserts a combo widget
+        # immediately *after* the seed widget in widgets_values.
+        # We detect this by walking the prompt's inputs, finding seed keys,
+        # then locating them in the serialised widgets_values array.
+        node_actions: dict[str, dict[str, str]] = {}  # node_id → { input_key → action }
+        for wf_node in workflow_nodes:
+            node_id = str(wf_node.get("id", ""))
+            wv = wf_node.get("widgets_values")
+            if not isinstance(wv, list) or node_id not in prompt:
+                continue
+            node_inputs = prompt[node_id].get("inputs") if isinstance(prompt[node_id], dict) else None
+            if not node_inputs:
+                continue
+            # For each seed key in the prompt inputs, find its position in
+            # widgets_values and read the next value as the action string.
+            for seed_key in _SEED_INPUT_KEYS:
+                if seed_key not in node_inputs:
+                    continue
+                seed_val = node_inputs[seed_key]
+                if not isinstance(seed_val, (int, float)):
+                    continue
+                # Locate seed_val in widgets_values
+                for idx, wv_val in enumerate(wv):
+                    if wv_val == seed_val and idx + 1 < len(wv):
+                        next_val = wv[idx + 1]
+                        if isinstance(next_val, str) and next_val in (
+                            "fixed", "increment", "decrement", "randomize"
+                        ):
+                            node_actions.setdefault(node_id, {})[seed_key] = next_val
+                            break
+
+        # Apply the discovered actions (or default to randomize for
+        # nodes that have seed inputs but no workflow metadata entry)
+        for node_id, node_data in prompt.items():
+            if not isinstance(node_data, dict):
+                continue
+            inputs = node_data.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            for seed_key in _SEED_INPUT_KEYS:
+                if seed_key not in inputs or not isinstance(inputs[seed_key], (int, float)):
+                    continue
+                action = (node_actions.get(node_id) or {}).get(seed_key, "randomize")
+                inputs[seed_key] = _apply_seed_action(int(inputs[seed_key]), action, MAX_SEED)
+
+        # Also update widgets_values in the workflow metadata so that
+        # saved PNG metadata stays consistent with what was actually run.
+        for wf_node in workflow_nodes:
+            node_id = str(wf_node.get("id", ""))
+            wv = wf_node.get("widgets_values")
+            if not isinstance(wv, list) or node_id not in prompt:
+                continue
+            node_inputs = prompt[node_id].get("inputs") if isinstance(prompt[node_id], dict) else None
+            if not node_inputs:
+                continue
+            for seed_key in _SEED_INPUT_KEYS:
+                if seed_key not in node_inputs:
+                    continue
+                new_val = node_inputs[seed_key]
+                # Find and update the old seed value in widgets_values
+                actions = (node_actions.get(node_id) or {})
+                if seed_key in actions:
+                    for idx, wv_val in enumerate(wv):
+                        if idx + 1 < len(wv) and isinstance(wv[idx + 1], str) and wv[idx + 1] in (
+                            "fixed", "increment", "decrement", "randomize"
+                        ):
+                            wv[idx] = new_val
+                            break
+    else:
+        # Fallback: no workflow metadata — randomise all seed inputs
+        for _nid, node_data in prompt.items():
+            if not isinstance(node_data, dict):
+                continue
+            inputs = node_data.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            for seed_key in _SEED_INPUT_KEYS:
+                if seed_key in inputs and isinstance(inputs[seed_key], (int, float)):
+                    inputs[seed_key] = random.randint(0, MAX_SEED)
+
+
+def _apply_seed_action(current: int, action: str, max_seed: int) -> int:
+    """Apply a control_after_generate action to a seed value."""
+    import random
+    if action == "randomize":
+        return random.randint(0, max_seed)
+    elif action == "increment":
+        return (current + 1) if current < max_seed else 0
+    elif action == "decrement":
+        return (current - 1) if current > 0 else max_seed
+    else:  # "fixed" or unknown
+        return current
+
+
+def _clear_pending_queue(srv) -> None:
+    """Remove all pending (not-yet-running) items from the queue.
+
+    This prevents stacking multiple reruns when the button is clicked
+    rapidly or when retries fire before the previous rerun started.
+    """
+    try:
+        srv.prompt_queue.wipe_queue()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -281,48 +435,110 @@ def _register_routes() -> None:
 
     @routes.get("/simple_utility/global_image_preview/status")
     async def _api_status(request):
-        """Return workflow execution status."""
-        return web.json_response(get_workflow_status())
+        """Return workflow execution status + queue info for smart retry."""
+        st = get_workflow_status()
+        # Include queue_pending so the viewer can avoid duplicate submissions
+        try:
+            st["queue_pending"] = PromptServer.instance.prompt_queue.get_tasks_remaining()
+        except Exception:
+            st["queue_pending"] = 0
+        return web.json_response(st)
 
     @routes.post("/simple_utility/global_image_preview/rerun")
     async def _api_rerun(request):
-        """Interrupt the current workflow (if running) and re-queue the last prompt."""
-        import nodes as comfy_nodes
-        status = get_workflow_status()
+        """Interrupt the current workflow (if running), wait for it to
+        fully stop, then re-queue the last prompt.
 
-        # Interrupt if currently running
+        Accepts JSON body:
+          - ``mode``: ``"same"`` (default) or ``"new"``
+            - ``"same"``: re-queue with identical settings (seeds unchanged).
+            - ``"new"``: apply each seed widget's ``control_after_generate``
+              setting (randomize / increment / decrement / fixed) so the
+              result changes as it would when pressing Queue Prompt in the UI.
+          - ``rerun_id``: a unique caller-supplied ID (e.g. per-tab UUID).
+            The server tracks the last ``rerun_id`` that successfully queued
+            so callers can poll ``GET /status`` and check ``last_rerun_id``
+            to confirm their command was processed without ambiguity.
+        """
+        global _rerun_in_progress, _last_rerun_id
+        import nodes as comfy_nodes
+        import asyncio
+        import copy
+        import random
+
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        mode = body.get("mode", "same")        # "same" | "new"
+        rerun_id = body.get("rerun_id", None)  # per-tab caller ID
+
+        # ── Step 1: Interrupt current workflow if running ──
+        status = get_workflow_status()
         if status["running"]:
             comfy_nodes.interrupt_processing()
-            # Small delay to let the interrupt propagate
-            import asyncio
-            await asyncio.sleep(0.3)
+            # Poll until the workflow is no longer running (max 5 s)
+            for _ in range(50):
+                await asyncio.sleep(0.1)
+                if not get_workflow_status()["running"]:
+                    break
 
-        # Re-queue the last prompt
+        # ── Step 2: Clear pending queue to avoid stacking reruns ──
+        try:
+            srv = PromptServer.instance
+            _clear_pending_queue(srv)
+        except Exception:
+            pass
+
+        # ── Step 3: Deep-copy the saved user prompt ──
         with _workflow_status_lock:
-            prompt = _last_prompt
-            extra = _last_extra_data
+            if _user_prompt is None:
+                return web.json_response(
+                    {"error": "No previous prompt to rerun"}, status=400
+                )
+            prompt = copy.deepcopy(_user_prompt)
+            extra_data = copy.deepcopy(_user_extra_data) if _user_extra_data else {}
 
-        if prompt is None:
-            return web.json_response({"error": "No previous prompt to rerun"}, status=400)
+        # ── Step 4 (New Task only): apply control_after_generate rules ──
+        if mode == "new":
+            _apply_control_after_generate(prompt, extra_data)
 
         import uuid
         prompt_id = str(uuid.uuid4())
-        extra_data = dict(extra) if extra else {}
-        # Submit via the queue directly
+
         try:
             import execution
             srv = PromptServer.instance
             valid = await execution.validate_prompt(prompt_id, prompt, None)
             if valid[0]:
                 outputs_to_execute = valid[2]
-                srv.prompt_queue.put(
-                    (srv.number, prompt_id, prompt, extra_data, outputs_to_execute, {})
-                )
+                _rerun_in_progress = True
+                try:
+                    srv.prompt_queue.put(
+                        (srv.number, prompt_id, prompt, extra_data,
+                         outputs_to_execute, {})
+                    )
+                finally:
+                    _rerun_in_progress = False
                 srv.number += 1
-                return web.json_response({"prompt_id": prompt_id, "status": "queued"})
+                # Update _user_prompt so the NEXT rerun always uses the
+                # very last queued workflow (not the original one).
+                import copy as _copy
+                _set_user_prompt(_copy.deepcopy(prompt), _copy.deepcopy(extra_data))
+                # Track the rerun_id so callers can confirm processing
+                with _workflow_status_lock:
+                    _last_rerun_id = rerun_id
+                return web.json_response(
+                    {"prompt_id": prompt_id, "status": "queued",
+                     "mode": mode, "rerun_id": rerun_id}
+                )
             else:
-                return web.json_response({"error": str(valid[1])}, status=400)
+                return web.json_response(
+                    {"error": str(valid[1])}, status=400
+                )
         except Exception as e:
+            _rerun_in_progress = False
             return web.json_response({"error": str(e)}, status=500)
 
     @routes.get("/simple_utility/global_image_preview/viewer")

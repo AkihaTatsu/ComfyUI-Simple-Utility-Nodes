@@ -380,7 +380,6 @@
     let lastImagesCounter  = -1;
     let lastPreviewCounter = -1;
     let isPolling          = true;
-    let rerunInFlight      = false;
 
     /* ── Helpers ── */
     function viewUrl(info) {
@@ -507,155 +506,122 @@
             wfNode.textContent = '';
         }
 
-        // While a rerun is in-flight, check if the new prompt has started
-        if (rerunInFlight && checkRerunConfirmed(status)) {
-            resetRerun();   // confirmed — re-enable the button
-        } else {
-            rerunBtn.disabled = rerunInFlight;
-        }
+        // Check if our pending rerun has been confirmed by the server
+        rerunCheckConfirmation(status);
     }
 
     /* ═══════════════════════════════════════════════════════
-     * Rerun split-button
+     * Rerun split-button — fully server-driven
      *
-     * Two modes controlled by the dropdown:
-     *   "same" — Same Task: POST /rerun with the exact captured prompt
-     *            (seeds stay the same, everything identical)
-     *   "new"  — New Task: send a BroadcastChannel message to the
-     *            main ComfyUI tab which calls app.queuePrompt(0),
-     *            re-serializing the graph (seed++, etc.)
+     * Design principles:
+     *   1. Every rerun command goes through the server-side
+     *      POST /simple_utility/global_image_preview/rerun
+     *      endpoint.  This works identically from LAN or WAN,
+     *      regardless of whether the ComfyUI tab is open.
+     *
+     *   2. Each viewer tab has a unique TAB_ID (UUID).  The
+     *      rerun request sends this as ``rerun_id``.  The
+     *      server echoes back the last successfully queued
+     *      ``rerun_id`` in the status response so the tab
+     *      can confirm its own command was processed.
+     *
+     *   3. The server clears the pending queue before adding
+     *      the new rerun item, so rapid clicks or retries
+     *      NEVER stack extra jobs.
+     *
+     *   4. "Same Task" re-queues the exact same prompt with
+     *      all values unchanged (seeds, primitives, etc.).
+     *      "New Task" applies each widget's
+     *      control_after_generate rule (randomize/increment/
+     *      decrement/fixed) server-side.
+     *
+     *   5. The button stays locked until the server confirms
+     *      the rerun_id matches, OR a timeout expires.
      * ═══════════════════════════════════════════════════════ */
-    const rerunMode = document.getElementById('rerunMode');
-    let bc = null;
-    try { bc = new BroadcastChannel('simple_global_image_preview'); } catch(e) {}
+    const rerunMode   = document.getElementById('rerunMode');
 
-    // Update button label when mode changes
+    // Unique per-tab identifier — survives page reloads within the same tab
+    const TAB_ID = crypto.randomUUID();
+
+    // Button labels
     const LABELS = { same: '⟳ Rerun (Same Task)', new: '⟳ Rerun (New Task)' };
-    function getMode() {
-        return rerunMode.value || 'same';
-    }
+    function getMode() { return rerunMode.value || 'same'; }
+
+    // ── Rerun state ──
+    let _rerunLocked      = false;   // true while a rerun is in-flight
+    let _pendingRerunId   = null;    // the rerun_id we are waiting for
+    let _rerunTimeoutTimer = null;   // safety timeout to unlock the button
+    const RERUN_TIMEOUT_MS = 15000;  // max wait before force-unlock
+
+    // Sync button label with dropdown
     rerunMode.addEventListener('change', () => {
-        if (!rerunInFlight) rerunBtn.textContent = LABELS[getMode()] || LABELS.same;
+        if (!_rerunLocked) rerunBtn.textContent = LABELS[getMode()] || LABELS.same;
     });
 
-    // ── Rerun confirmation state ──
-    // After sending a rerun command we watch /status polls for a NEW
-    // prompt_id (different from the one captured before clicking).
-    // If nothing changes within RETRY_INTERVAL_MS we resend the command.
-    let _rerunPrePromptId  = null;   // prompt_id captured before click
-    let _rerunRetries      = 0;
-    const RETRY_INTERVAL_MS = 3000;
-    const MAX_RETRIES       = 20;
-    let _retryTimer         = null;
-    let _rerunNewTaskAcked  = false;  // tracks if BroadcastChannel ack arrived
-
-    // Listen for ack from main tab (New Task mode)
-    if (bc) {
-        bc.onmessage = (ev) => {
-            if (ev.data?.type === 'rerun_new_task_ack') {
-                _rerunNewTaskAcked = true;
-                if (!ev.data.ok) {
-                    console.warn('New Task rerun failed:', ev.data.error);
-                    resetRerun();            // give up on error
-                }
-                // On success the ack just means the command was sent;
-                // we still wait for the poll loop to confirm the new prompt_id.
-            }
-        };
-    }
-
     /**
-     * Called from the poll loop (updateWorkflowStatus) every 300 ms.
-     * Returns true when the new workflow is confirmed started so the
-     * caller knows the button can be re-enabled.
+     * Called every poll cycle (from updateWorkflowStatus).
+     * Checks if the server's last_rerun_id matches the one we sent.
      */
-    function checkRerunConfirmed(status) {
-        if (!rerunInFlight) return false;
-        if (!status) return false;
-        // A different prompt_id means a new prompt has been picked up.
-        if (status.prompt_id && status.prompt_id !== _rerunPrePromptId) {
-            return true;
+    function rerunCheckConfirmation(status) {
+        if (!_rerunLocked || !_pendingRerunId) return;
+        if (status && status.last_rerun_id === _pendingRerunId) {
+            rerunUnlock();
         }
-        return false;
     }
 
-    /** Fully reset the rerun button to its idle state. */
-    function resetRerun() {
-        clearTimeout(_retryTimer);
-        _retryTimer = null;
-        _rerunRetries = 0;
-        _rerunNewTaskAcked = false;
-        rerunInFlight = false;
+    /** Unlock the button and reset all rerun state. */
+    function rerunUnlock() {
+        clearTimeout(_rerunTimeoutTimer);
+        _rerunTimeoutTimer = null;
+        _rerunLocked    = false;
+        _pendingRerunId = null;
         rerunBtn.disabled = false;
         rerunBtn.textContent = LABELS[getMode()] || LABELS.same;
     }
 
-    /** Fire (or re-fire) the actual rerun command for the current mode. */
-    async function sendRerunCommand() {
-        const mode = getMode();
-
-        if (mode === 'new') {
-            if (!bc) { console.warn('BroadcastChannel not available'); resetRerun(); return; }
-            let running = false;
-            try {
-                const sr = await fetch('/simple_utility/global_image_preview/status');
-                if (sr.ok) { running = (await sr.json()).running; }
-            } catch(e) {}
-            _rerunNewTaskAcked = false;
-            bc.postMessage({ type: 'rerun_new_task', interrupt: running });
-        } else {
-            try {
-                const resp = await fetch('/simple_utility/global_image_preview/rerun', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: '{}',
-                });
-                const data = await resp.json();
-                if (!resp.ok) { console.warn('Rerun failed:', data.error); resetRerun(); return; }
-            } catch(e) {
-                console.warn('Rerun request error:', e); resetRerun(); return;
-            }
-        }
-
-        // Schedule a retry if the status hasn't changed in time
-        scheduleRetry();
-    }
-
-    /** Schedule an auto-retry timer. */
-    function scheduleRetry() {
-        clearTimeout(_retryTimer);
-        _retryTimer = setTimeout(async () => {
-            if (!rerunInFlight) return;
-            _rerunRetries++;
-            if (_rerunRetries >= MAX_RETRIES) {
-                console.warn(`Rerun: gave up after ${MAX_RETRIES} retries`);
-                resetRerun();
-                return;
-            }
-            console.log(`Rerun: no status change detected, retrying (${_rerunRetries}/${MAX_RETRIES})…`);
-            rerunBtn.textContent = `⟳ Retrying (${_rerunRetries}/${MAX_RETRIES})…`;
-            await sendRerunCommand();
-        }, RETRY_INTERVAL_MS);
-    }
-
+    /** Main click handler. */
     rerunBtn.addEventListener('click', async () => {
-        if (rerunInFlight) return;
-        rerunInFlight = true;
+        if (_rerunLocked) return;
+
+        // Lock immediately
+        _rerunLocked  = true;
         rerunBtn.disabled = true;
         rerunBtn.textContent = '⟳ Sending…';
-        _rerunRetries = 0;
 
-        // Capture the current prompt_id BEFORE sending the command
+        // Generate a unique ID for THIS specific rerun request
+        const rerunId = TAB_ID + ':' + Date.now();
+        _pendingRerunId = rerunId;
+
+        // Safety timeout — always unlock after RERUN_TIMEOUT_MS
+        _rerunTimeoutTimer = setTimeout(() => {
+            console.warn('Rerun: timed out waiting for server confirmation');
+            rerunUnlock();
+        }, RERUN_TIMEOUT_MS);
+
+        // Send the rerun command to the server
         try {
-            const sr = await fetch('/simple_utility/global_image_preview/status');
-            if (sr.ok) {
-                const st = await sr.json();
-                _rerunPrePromptId = st.prompt_id;
-            }
-        } catch(e) { _rerunPrePromptId = null; }
+            const resp = await fetch('/simple_utility/global_image_preview/rerun', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: getMode(),
+                    rerun_id: rerunId,
+                }),
+            });
 
-        rerunBtn.textContent = '⟳ Waiting…';
-        await sendRerunCommand();
+            if (!resp.ok) {
+                const data = await resp.json().catch(() => ({}));
+                console.warn('Rerun failed:', data.error || resp.statusText);
+                rerunUnlock();
+                return;
+            }
+
+            // Server accepted — now wait for poll loop to confirm
+            rerunBtn.textContent = '⟳ Waiting…';
+        } catch (e) {
+            console.warn('Rerun request error:', e);
+            rerunUnlock();
+        }
     });
 
     /* ═══════════════════════════════════════════════════════

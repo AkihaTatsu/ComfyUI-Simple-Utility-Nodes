@@ -115,29 +115,6 @@ app.registerExtension({
                         showPreviewBlob(event.detail);
                     }
                 });
-
-                // 3. Cross-tab BroadcastChannel — the standalone fullscreen viewer
-                //    sends messages here to trigger "Rerun (New Task)" which re-
-                //    serializes the graph (applying widget mutations like seed++).
-                try {
-                    const bc = new BroadcastChannel("simple_global_image_preview");
-                    bc.onmessage = async (ev) => {
-                        if (!ev.data || ev.data.type !== "rerun_new_task") return;
-                        try {
-                            // Interrupt first if requested
-                            if (ev.data.interrupt) {
-                                await api.interrupt();
-                                await new Promise(r => setTimeout(r, 300));
-                            }
-                            // Queue a fresh prompt (re-serializes graph, applies seed++ etc.)
-                            await app.queuePrompt(0);
-                            bc.postMessage({ type: "rerun_new_task_ack", ok: true });
-                        } catch (e) {
-                            console.warn("[GlobalImagePreview] rerun_new_task failed:", e);
-                            bc.postMessage({ type: "rerun_new_task_ack", ok: false, error: String(e) });
-                        }
-                    };
-                } catch(e) { /* BroadcastChannel not supported — ignore */ }
             }
 
             // ── Node lifecycle ──────────────────────────────────────
