@@ -287,131 +287,211 @@ def _install_server_hook() -> None:
 # Rerun helpers
 # ---------------------------------------------------------------------------
 
-_SEED_INPUT_KEYS = {"seed", "noise_seed"}
+# Prompt input keys that typically carry a seed value.
+_SEED_INPUT_KEYS = {"seed", "noise_seed", "seed_num"}
+
+# Default upper bound — matches ComfyUI's standard INT widget range.
+_DEFAULT_SEED_MAX = 0xFFFFFFFFFFFFFFFF
 
 
-def _apply_control_after_generate(prompt: dict, extra_data: dict) -> None:
-    """Apply per-widget ``control_after_generate`` rules to seed inputs.
+def _get_seed_range_for_node(class_type: str, seed_key: str) -> tuple[int, int]:
+    """Return ``(min, max)`` for *seed_key* as declared in the node's
+    ``INPUT_TYPES``.  Falls back to ``(0, _DEFAULT_SEED_MAX)``."""
+    try:
+        import nodes
+        cls = nodes.NODE_CLASS_MAPPINGS.get(class_type)
+        if cls is None:
+            return 0, _DEFAULT_SEED_MAX
+        input_types = cls.INPUT_TYPES()
+        for section in ("required", "optional"):
+            section_dict = input_types.get(section, {})
+            if seed_key in section_dict:
+                spec = section_dict[seed_key]
+                if isinstance(spec, tuple) and len(spec) >= 2 and isinstance(spec[1], dict):
+                    return (spec[1].get("min", 0),
+                            spec[1].get("max", _DEFAULT_SEED_MAX))
+    except Exception:
+        pass
+    return 0, _DEFAULT_SEED_MAX
 
-    Inspects ``extra_data['extra_pnginfo']['workflow']['nodes']`` to discover
-    which nodes have seed widgets with a companion ``control_after_generate``
-    combo widget.  For each such node the corresponding seed value in *prompt*
-    is mutated according to the rule:
 
-    - ``"randomize"`` → random 64-bit integer
-    - ``"increment"`` → current value + 1  (wraps at 2^64)
-    - ``"decrement"`` → current value − 1  (wraps at 0)
-    - ``"fixed"``     → no change
+def _clamp_seed_values(prompt: dict, extra_data: dict | None = None) -> None:
+    """Clamp every seed-like INT input to its node-defined range.
 
-    If no workflow metadata is available, falls back to randomising every
-    ``seed`` / ``noise_seed`` input unconditionally.
+    This prevents ``validate_prompt`` from rejecting nodes whose cached
+    seed value exceeds the ``max`` declared in their ``INPUT_TYPES``.
+
+    Uses ``seed_widgets`` from the workflow metadata (if available) to
+    reliably identify seed inputs and keep ``widgets_values`` in sync.
+    Falls back to scanning ``_SEED_INPUT_KEYS`` in the prompt dict.
     """
     import random
 
-    MAX_SEED = 0xFFFFFFFFFFFFFFFF
-
-    # Try to extract node metadata from the workflow
-    workflow_nodes: list | None = None
+    seed_widget_map: dict | None = None
+    workflow_nodes_by_id: dict = {}
     try:
-        workflow_nodes = extra_data["extra_pnginfo"]["workflow"]["nodes"]
+        wf = extra_data["extra_pnginfo"]["workflow"]
+        seed_widget_map = wf.get("seed_widgets")
+        for n in wf.get("nodes", []):
+            workflow_nodes_by_id[str(n["id"])] = n
+    except (KeyError, TypeError, AttributeError):
+        pass
+
+    for node_id, node_data in prompt.items():
+        if not isinstance(node_data, dict):
+            continue
+        class_type = node_data.get("class_type", "")
+        inputs = node_data.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+
+        # Check every seed-like key in this node's inputs
+        for seed_key in _SEED_INPUT_KEYS:
+            if seed_key not in inputs or not isinstance(inputs[seed_key], (int, float)):
+                continue
+            val = int(inputs[seed_key])
+            lo, hi = _get_seed_range_for_node(class_type, seed_key)
+            if val < lo or val > hi:
+                inputs[seed_key] = random.randint(lo, hi)
+                # Also sync widgets_values via seed_widget_map
+                wf_node = workflow_nodes_by_id.get(node_id)
+                wv_idx = (seed_widget_map or {}).get(node_id)
+                if wf_node and wv_idx is not None:
+                    wv = wf_node.get("widgets_values")
+                    if isinstance(wv, list) and wv_idx < len(wv):
+                        wv[wv_idx] = inputs[seed_key]
+
+
+def _apply_control_after_generate(prompt: dict, extra_data: dict,
+                                  skip_nodes: set[str] | None = None) -> None:
+    """Apply per-widget ``control_after_generate`` rules to seed inputs.
+
+    This function handles **standard ComfyUI seed widgets** that are NOT
+    managed by any third-party ``on_prompt_handler`` hook.  Third-party
+    global-seed nodes (Easy-Use, Inspire-Pack, Impact-Pack, etc.) are
+    handled *universally* by calling ``trigger_on_prompt`` in the rerun
+    handler **before** this function is invoked.
+
+    *skip_nodes* — node IDs whose seeds were already modified by a hook
+    and must NOT be touched again.
+
+    Strategy:
+      1. **seed_widgets** map (from workflow metadata) — for every
+         node ID in this map, read the ``control_after_generate``
+         action string from ``widgets_values[widget_idx + 1]``.
+      2. **Fallback** — for nodes NOT in ``seed_widgets``, scan for
+         ``seed`` / ``noise_seed`` / ``seed_num`` inputs and try to
+         discover the action from ``widgets_values`` via value-matching.
+
+    All generated seed values are clamped to the node's declared min/max.
+    """
+    if skip_nodes is None:
+        skip_nodes = set()
+
+    # ── Extract workflow metadata ──
+    seed_widget_map: dict | None = None   # node_id_str → widget_idx
+    workflow_nodes_by_id: dict = {}
+    try:
+        wf = extra_data["extra_pnginfo"]["workflow"]
+        seed_widget_map = wf.get("seed_widgets")
+        for n in wf.get("nodes", []):
+            workflow_nodes_by_id[str(n["id"])] = n
     except (KeyError, TypeError):
         pass
 
-    if workflow_nodes:
-        # Build a mapping:  node_id_str → control_after_generate action
-        # by inspecting widgets_values for each workflow node.
-        #
-        # Convention: for each seed/noise_seed INT input declared with
-        # control_after_generate=True, the frontend inserts a combo widget
-        # immediately *after* the seed widget in widgets_values.
-        # We detect this by walking the prompt's inputs, finding seed keys,
-        # then locating them in the serialised widgets_values array.
-        node_actions: dict[str, dict[str, str]] = {}  # node_id → { input_key → action }
-        for wf_node in workflow_nodes:
-            node_id = str(wf_node.get("id", ""))
-            wv = wf_node.get("widgets_values")
-            if not isinstance(wv, list) or node_id not in prompt:
+    # ── Strategy 1: use seed_widgets for reliable widget-index lookup ──
+    handled_nodes: set[str] = set()
+    if seed_widget_map:
+        for nid, wv_idx in seed_widget_map.items():
+            if nid not in prompt or nid in skip_nodes:
                 continue
-            node_inputs = prompt[node_id].get("inputs") if isinstance(prompt[node_id], dict) else None
-            if not node_inputs:
+            ndata = prompt[nid]
+            if not isinstance(ndata, dict):
                 continue
-            # For each seed key in the prompt inputs, find its position in
-            # widgets_values and read the next value as the action string.
-            for seed_key in _SEED_INPUT_KEYS:
-                if seed_key not in node_inputs:
-                    continue
-                seed_val = node_inputs[seed_key]
-                if not isinstance(seed_val, (int, float)):
-                    continue
-                # Locate seed_val in widgets_values
+            class_type = ndata.get("class_type", "")
+            inputs = ndata.get("inputs", {})
+            wf_node = workflow_nodes_by_id.get(nid)
+            wv = wf_node.get("widgets_values") if wf_node else None
+
+            # Read action from widgets_values[wv_idx + 1]
+            action = "randomize"  # default
+            if isinstance(wv, list) and wv_idx + 1 < len(wv):
+                candidate = wv[wv_idx + 1]
+                if isinstance(candidate, str) and candidate in (
+                    "fixed", "increment", "decrement", "randomize"
+                ):
+                    action = candidate
+
+            # Find the seed input key and apply the action
+            for sk in ("seed_num", "seed", "noise_seed"):
+                if sk in inputs and isinstance(inputs[sk], (int, float)):
+                    lo, hi = _get_seed_range_for_node(class_type, sk)
+                    inputs[sk] = _apply_seed_action(
+                        int(inputs[sk]), action, hi, lo
+                    )
+                    # Sync widgets_values
+                    if isinstance(wv, list) and wv_idx < len(wv):
+                        wv[wv_idx] = inputs[sk]
+                    handled_nodes.add(nid)
+                    break
+
+    # ── Strategy 2: nodes NOT in seed_widget_map ──
+    # Use the workflow node's widgets_values to find control_after_generate.
+    for nid, ndata in prompt.items():
+        if not isinstance(ndata, dict):
+            continue
+        if nid in handled_nodes or nid in skip_nodes:
+            continue  # already handled via seed_widget_map or hook
+        inputs = ndata.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        class_type = ndata.get("class_type", "")
+
+        wf_node = workflow_nodes_by_id.get(nid)
+        wv = wf_node.get("widgets_values") if wf_node else None
+
+        for seed_key in _SEED_INPUT_KEYS:
+            if seed_key not in inputs or not isinstance(inputs[seed_key], (int, float)):
+                continue
+            lo, hi = _get_seed_range_for_node(class_type, seed_key)
+
+            # Try to discover the action from widgets_values
+            action = "randomize"  # default for nodes without metadata
+            if isinstance(wv, list):
+                seed_val = inputs[seed_key]
                 for idx, wv_val in enumerate(wv):
                     if wv_val == seed_val and idx + 1 < len(wv):
-                        next_val = wv[idx + 1]
-                        if isinstance(next_val, str) and next_val in (
+                        candidate = wv[idx + 1]
+                        if isinstance(candidate, str) and candidate in (
                             "fixed", "increment", "decrement", "randomize"
                         ):
-                            node_actions.setdefault(node_id, {})[seed_key] = next_val
+                            action = candidate
                             break
 
-        # Apply the discovered actions (or default to randomize for
-        # nodes that have seed inputs but no workflow metadata entry)
-        for node_id, node_data in prompt.items():
-            if not isinstance(node_data, dict):
-                continue
-            inputs = node_data.get("inputs")
-            if not isinstance(inputs, dict):
-                continue
-            for seed_key in _SEED_INPUT_KEYS:
-                if seed_key not in inputs or not isinstance(inputs[seed_key], (int, float)):
-                    continue
-                action = (node_actions.get(node_id) or {}).get(seed_key, "randomize")
-                inputs[seed_key] = _apply_seed_action(int(inputs[seed_key]), action, MAX_SEED)
+            inputs[seed_key] = _apply_seed_action(
+                int(inputs[seed_key]), action, hi, lo
+            )
 
-        # Also update widgets_values in the workflow metadata so that
-        # saved PNG metadata stays consistent with what was actually run.
-        for wf_node in workflow_nodes:
-            node_id = str(wf_node.get("id", ""))
-            wv = wf_node.get("widgets_values")
-            if not isinstance(wv, list) or node_id not in prompt:
-                continue
-            node_inputs = prompt[node_id].get("inputs") if isinstance(prompt[node_id], dict) else None
-            if not node_inputs:
-                continue
-            for seed_key in _SEED_INPUT_KEYS:
-                if seed_key not in node_inputs:
-                    continue
-                new_val = node_inputs[seed_key]
-                # Find and update the old seed value in widgets_values
-                actions = (node_actions.get(node_id) or {})
-                if seed_key in actions:
-                    for idx, wv_val in enumerate(wv):
-                        if idx + 1 < len(wv) and isinstance(wv[idx + 1], str) and wv[idx + 1] in (
-                            "fixed", "increment", "decrement", "randomize"
-                        ):
-                            wv[idx] = new_val
-                            break
-    else:
-        # Fallback: no workflow metadata — randomise all seed inputs
-        for _nid, node_data in prompt.items():
-            if not isinstance(node_data, dict):
-                continue
-            inputs = node_data.get("inputs")
-            if not isinstance(inputs, dict):
-                continue
-            for seed_key in _SEED_INPUT_KEYS:
-                if seed_key in inputs and isinstance(inputs[seed_key], (int, float)):
-                    inputs[seed_key] = random.randint(0, MAX_SEED)
+            # Sync widgets_values (best-effort value search)
+            if isinstance(wv, list):
+                for idx, wv_val in enumerate(wv):
+                    if idx + 1 < len(wv) and isinstance(wv[idx + 1], str) and wv[idx + 1] in (
+                        "fixed", "increment", "decrement", "randomize"
+                    ):
+                        wv[idx] = inputs[seed_key]
+                        break
 
 
-def _apply_seed_action(current: int, action: str, max_seed: int) -> int:
+def _apply_seed_action(current: int, action: str, max_seed: int,
+                       min_seed: int = 0) -> int:
     """Apply a control_after_generate action to a seed value."""
     import random
     if action == "randomize":
-        return random.randint(0, max_seed)
+        return random.randint(min_seed, max_seed)
     elif action == "increment":
-        return (current + 1) if current < max_seed else 0
+        return (current + 1) if current < max_seed else min_seed
     elif action == "decrement":
-        return (current - 1) if current > 0 else max_seed
+        return (current - 1) if current > min_seed else max_seed
     else:  # "fixed" or unknown
         return current
 
@@ -592,16 +672,91 @@ def _register_routes() -> None:
             prompt = copy.deepcopy(_user_prompt)
             extra_data = copy.deepcopy(_user_extra_data) if _user_extra_data else {}
 
-        # ── Step 4 (New Task only): apply control_after_generate rules ──
-        if mode == "new":
-            _apply_control_after_generate(prompt, extra_data)
+        # ── Step 4 (New Task only): run on_prompt hooks + per-node CAG ──
+        #
+        # The normal ``/prompt`` route calls ``trigger_on_prompt`` which
+        # invokes ALL ``on_prompt_handler`` hooks registered by every
+        # custom-node package (e.g. Easy-Use globalSeed distribution,
+        # Impact-Pack switches / wildcards / regional-sampler seeds,
+        # Inspire-Pack global-seed / wildcards / sampler updates, etc.).
+        #
+        # Our rerun bypasses ``/prompt`` entirely, so we must call
+        # ``trigger_on_prompt`` ourselves for New Task mode so that
+        # **all** hooks run — no hardcoded node-specific logic needed.
+        #
+        # For Same Task mode, hooks must NOT run (user wants the exact
+        # same prompt), but we still clamp seeds to valid ranges.
+        #
+        # After hooks, we also run our own per-node control_after_generate
+        # logic for *standard* ComfyUI seed widgets — these are NOT
+        # handled by any hook (KSampler, etc.).
 
         import uuid
         prompt_id = str(uuid.uuid4())
+        srv = PromptServer.instance
+
+        if mode == "new":
+            # Snapshot seed values BEFORE hooks — so we can detect which
+            # nodes were modified by a hook and avoid double-applying our
+            # own per-node control_after_generate to those nodes.
+            seed_snapshot: dict[str, dict[str, int]] = {}
+            for nid, ndata in prompt.items():
+                if not isinstance(ndata, dict):
+                    continue
+                inputs = ndata.get("inputs")
+                if not isinstance(inputs, dict):
+                    continue
+                for sk in _SEED_INPUT_KEYS:
+                    if sk in inputs and isinstance(inputs[sk], (int, float)):
+                        seed_snapshot.setdefault(nid, {})[sk] = int(inputs[sk])
+
+            # Build the json_data envelope that trigger_on_prompt expects
+            # (same shape the frontend POSTs to /prompt).
+            json_data = {
+                "prompt": prompt,
+                "extra_data": extra_data,
+            }
+            json_data = srv.trigger_on_prompt(json_data)
+            # Re-extract prompt / extra_data — hooks may have replaced or
+            # mutated the dicts, or even restructured the envelope.
+            prompt = json_data.get("prompt", prompt)
+            extra_data = json_data.get("extra_data", extra_data)
+
+            # Determine which nodes had their seeds changed by hooks
+            hook_modified_nodes: set[str] = set()
+            for nid, old_seeds in seed_snapshot.items():
+                if nid not in prompt:
+                    continue
+                ndata = prompt[nid]
+                if not isinstance(ndata, dict):
+                    continue
+                inputs = ndata.get("inputs", {})
+                for sk, old_val in old_seeds.items():
+                    cur = inputs.get(sk)
+                    if isinstance(cur, (int, float)) and int(cur) != old_val:
+                        hook_modified_nodes.add(nid)
+                        break
+
+            # Apply per-node control_after_generate for standard seed
+            # widgets (KSampler etc.) that no hook has already modified.
+            _apply_control_after_generate(prompt, extra_data,
+                                          skip_nodes=hook_modified_nodes)
+
+        # ── Step 4b: Clamp seed values to each node's declared range ──
+        # This is necessary for BOTH modes because the cached prompt may
+        # contain seed values that were valid in a different context (e.g.
+        # the frontend randomised within 64-bit range but the node only
+        # accepts 32-bit seeds).  validate_prompt would reject such nodes.
+        _clamp_seed_values(prompt, extra_data)
+
+        # ── Step 5: Apply node replacements (same as /prompt route) ──
+        try:
+            srv.node_replace_manager.apply_replacements(prompt)
+        except Exception:
+            pass
 
         try:
             import execution
-            srv = PromptServer.instance
             valid = await execution.validate_prompt(prompt_id, prompt, None)
             if valid[0]:
                 outputs_to_execute = valid[2]
