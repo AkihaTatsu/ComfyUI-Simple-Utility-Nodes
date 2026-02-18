@@ -17,9 +17,14 @@ Architecture:
   API to work even for the standalone viewer page.
 """
 
+import json
 import os
 import threading
 from typing import Dict, List
+
+# Path to persist the last user prompt across server restarts.
+_PERSIST_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache")
+_PERSIST_PATH = os.path.normpath(os.path.join(_PERSIST_DIR, "last_prompt.json"))
 
 # ---------------------------------------------------------------------------
 # Server-side latest-image tracker
@@ -78,6 +83,9 @@ _rerun_in_progress: bool = False
 # Tracks the last successfully queued rerun_id for per-tab confirmation.
 _last_rerun_id: str | None = None
 
+# Tracks the last successfully processed interrupt_id for per-tab confirmation.
+_last_interrupt_id: str | None = None
+
 
 def _set_workflow_executing(node_id: str | None, prompt_id: str | None,
                             node_class: str | None = None) -> None:
@@ -101,6 +109,49 @@ def _set_user_prompt(prompt: dict, extra_data: dict | None = None) -> None:
     with _workflow_status_lock:
         _user_prompt = prompt
         _user_extra_data = extra_data
+    # Persist to disk so it survives server restarts
+    _save_user_prompt_to_disk(prompt, extra_data)
+
+
+def _save_user_prompt_to_disk(prompt: dict, extra_data: dict | None) -> None:
+    """Write the last user prompt to a JSON file for cross-session rerun."""
+    try:
+        os.makedirs(_PERSIST_DIR, exist_ok=True)
+        payload = {"prompt": prompt, "extra_data": extra_data or {}}
+        with open(_PERSIST_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+    except Exception:
+        pass  # best-effort
+
+
+def _load_user_prompt_from_disk() -> bool:
+    """Load the persisted prompt from disk into ``_user_prompt``.
+
+    Returns True if successful, False otherwise.
+    """
+    global _user_prompt, _user_extra_data
+    import copy
+    with _workflow_status_lock:
+        if _user_prompt is not None:
+            return True  # already have one
+
+    try:
+        if not os.path.isfile(_PERSIST_PATH):
+            return False
+        with open(_PERSIST_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        prompt = payload.get("prompt")
+        extra_data = payload.get("extra_data", {})
+        if not prompt or not isinstance(prompt, dict):
+            return False
+        # Write directly to globals (skip _set_user_prompt to avoid
+        # redundantly re-saving the same file we just loaded).
+        with _workflow_status_lock:
+            _user_prompt = copy.deepcopy(prompt)
+            _user_extra_data = copy.deepcopy(extra_data)
+        return True
+    except Exception:
+        return False
 
 
 def get_workflow_status() -> dict:
@@ -112,6 +163,7 @@ def get_workflow_status() -> dict:
             "prompt_id": _current_prompt_id,
             "has_last_prompt": _user_prompt is not None,
             "last_rerun_id": _last_rerun_id,
+            "last_interrupt_id": _last_interrupt_id,
         }
 
 
@@ -364,6 +416,37 @@ def _apply_seed_action(current: int, action: str, max_seed: int) -> int:
         return current
 
 
+def _try_load_from_history() -> bool:
+    """Try to load the last prompt from ComfyUI's history.
+
+    If ``_user_prompt`` is None (nothing queued this session), inspect
+    the server's execution history for the most recent entry and use
+    its prompt/extra_data.  Returns True if successful.
+    """
+    import copy
+    with _workflow_status_lock:
+        if _user_prompt is not None:
+            return True  # already have one
+
+    try:
+        from server import PromptServer
+        srv = PromptServer.instance
+        history = srv.prompt_queue.get_history(max_items=1)
+        if not history:
+            return False
+        # history is {prompt_id: {"prompt": [number, id, prompt_dict, extra_data, ...], ...}}
+        entry = next(iter(history.values()))
+        prompt_tuple = entry.get("prompt")
+        if not prompt_tuple or len(prompt_tuple) < 4:
+            return False
+        prompt_dict = copy.deepcopy(prompt_tuple[2])
+        extra_data = copy.deepcopy(prompt_tuple[3]) if prompt_tuple[3] else {}
+        _set_user_prompt(prompt_dict, extra_data)
+        return True
+    except Exception:
+        return False
+
+
 def _clear_pending_queue(srv) -> None:
     """Remove all pending (not-yet-running) items from the queue.
 
@@ -492,10 +575,19 @@ def _register_routes() -> None:
             pass
 
         # ── Step 3: Deep-copy the saved user prompt ──
+        # If nothing has been queued this session, try loading from:
+        #   1. Disk cache (persisted from a previous session)
+        #   2. In-memory history (if any prompt ran this session)
+        if _user_prompt is None:
+            if not _load_user_prompt_from_disk():
+                _try_load_from_history()
+
         with _workflow_status_lock:
             if _user_prompt is None:
                 return web.json_response(
-                    {"error": "No previous prompt to rerun"}, status=400
+                    {"error": "No previous prompt to rerun. "
+                     "Run a workflow first or check history."},
+                    status=400,
                 )
             prompt = copy.deepcopy(_user_prompt)
             extra_data = copy.deepcopy(_user_extra_data) if _user_extra_data else {}
@@ -540,6 +632,45 @@ def _register_routes() -> None:
         except Exception as e:
             _rerun_in_progress = False
             return web.json_response({"error": str(e)}, status=500)
+
+    @routes.post("/simple_utility/global_image_preview/interrupt")
+    async def _api_interrupt(request):
+        """Interrupt the current workflow and confirm via interrupt_id.
+
+        Accepts JSON body:
+          - ``interrupt_id``: a unique caller-supplied ID (per-tab UUID).
+            The server tracks the last ``interrupt_id`` that was processed
+            so callers can poll ``GET /status`` to confirm.
+
+        Does nothing if no workflow is running (returns success immediately).
+        """
+        global _last_interrupt_id
+        import nodes as comfy_nodes
+        import asyncio
+
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        interrupt_id = body.get("interrupt_id", None)
+
+        status = get_workflow_status()
+        if status["running"]:
+            comfy_nodes.interrupt_processing()
+            # Poll until the workflow is no longer running (max 5 s)
+            for _ in range(50):
+                await asyncio.sleep(0.1)
+                if not get_workflow_status()["running"]:
+                    break
+
+        with _workflow_status_lock:
+            _last_interrupt_id = interrupt_id
+
+        return web.json_response({
+            "status": "interrupted" if status["running"] else "idle",
+            "interrupt_id": interrupt_id,
+        })
 
     @routes.get("/simple_utility/global_image_preview/viewer")
     async def _viewer_page(request):

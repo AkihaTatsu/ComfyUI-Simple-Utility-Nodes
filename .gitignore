@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Runtime cache (persisted prompt data, etc.)
+.cache/
+
 # C extensions
 *.so
 

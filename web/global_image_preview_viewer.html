@@ -167,6 +167,22 @@
         #rerunMode:hover { background: #cf6d17; }
         #rerunMode option { background: var(--bg-panel); color: var(--text); }
 
+        /* Interrupt button */
+        #interruptBtn {
+            background: var(--red);
+            color: #fff;
+            border: 1px solid var(--red);
+            border-radius: 4px;
+            font-weight: 600;
+            padding: 4px 10px;
+            cursor: pointer;
+            font-size: 13px;
+            white-space: nowrap;
+            line-height: 1.2;
+        }
+        #interruptBtn:hover { background: #c0392b; }
+        #interruptBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+
         /* Connection dot in title */
         .conn-dot {
             width: 9px; height: 9px;
@@ -312,6 +328,7 @@
         </div>
     </div>
     <div class="top-right">
+        <button id="interruptBtn" disabled title="Interrupt the current running workflow">✕ Interrupt</button>
         <div class="rerun-group">
             <button id="rerunBtn" title="Interrupt (if running) and rerun the last workflow">⟳ Rerun (Same Task)</button>
             <select id="rerunMode" title="Choose rerun mode">
@@ -371,6 +388,7 @@
     const wfLabel        = document.getElementById('wfLabel');
     const wfNode         = document.getElementById('wfNode');
     const rerunBtn       = document.getElementById('rerunBtn');
+    const interruptBtn   = document.getElementById('interruptBtn');
 
     /* ── State ── */
     let lastKey            = null;
@@ -508,6 +526,14 @@
 
         // Check if our pending rerun has been confirmed by the server
         rerunCheckConfirmation(status);
+
+        // Check if our pending interrupt has been confirmed by the server
+        interruptCheckConfirmation(status);
+
+        // Enable/disable interrupt button based on running state
+        if (!_interruptLocked) {
+            interruptBtn.disabled = !running;
+        }
     }
 
     /* ═══════════════════════════════════════════════════════
@@ -621,6 +647,69 @@
         } catch (e) {
             console.warn('Rerun request error:', e);
             rerunUnlock();
+        }
+    });
+
+    /* ═══════════════════════════════════════════════════════
+     * Interrupt button
+     *
+     * Sends POST /simple_utility/global_image_preview/interrupt
+     * with a unique interrupt_id.  The button stays locked
+     * until the server echoes back the same interrupt_id in
+     * the status response (confirming the interrupt was
+     * processed), OR a safety timeout expires.
+     * ═══════════════════════════════════════════════════════ */
+    let _interruptLocked       = false;
+    let _pendingInterruptId    = null;
+    let _interruptTimeoutTimer = null;
+    const INTERRUPT_TIMEOUT_MS = 10000;
+
+    function interruptCheckConfirmation(status) {
+        if (!_interruptLocked || !_pendingInterruptId) return;
+        if (status && status.last_interrupt_id === _pendingInterruptId) {
+            interruptUnlock();
+        }
+    }
+
+    function interruptUnlock() {
+        clearTimeout(_interruptTimeoutTimer);
+        _interruptTimeoutTimer = null;
+        _interruptLocked    = false;
+        _pendingInterruptId = null;
+        interruptBtn.textContent = '✕ Interrupt';
+        // Will be re-enabled/disabled by next status poll based on running state
+        interruptBtn.disabled = true;
+    }
+
+    interruptBtn.addEventListener('click', async () => {
+        if (_interruptLocked) return;
+
+        _interruptLocked = true;
+        interruptBtn.disabled = true;
+        interruptBtn.textContent = '✕ Interrupting…';
+
+        const interruptId = TAB_ID + ':int:' + Date.now();
+        _pendingInterruptId = interruptId;
+
+        _interruptTimeoutTimer = setTimeout(() => {
+            console.warn('Interrupt: timed out waiting for server confirmation');
+            interruptUnlock();
+        }, INTERRUPT_TIMEOUT_MS);
+
+        try {
+            const resp = await fetch('/simple_utility/global_image_preview/interrupt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ interrupt_id: interruptId }),
+            });
+            if (!resp.ok) {
+                console.warn('Interrupt failed:', resp.statusText);
+                interruptUnlock();
+            }
+            // Wait for poll loop to confirm via last_interrupt_id
+        } catch (e) {
+            console.warn('Interrupt request error:', e);
+            interruptUnlock();
         }
     });
 
