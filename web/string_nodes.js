@@ -534,6 +534,16 @@ app.registerExtension({
                 // Initial render
                 renderMarkdown();
 
+                // Re-render after workflow restore — onConfigure is called
+                // after the framework has set all widget values from the
+                // saved workflow, so textWidget.value is up-to-date here.
+                const origOnConfigure = this.onConfigure;
+                this.onConfigure = function () {
+                    const r = origOnConfigure?.apply(this, arguments);
+                    renderMarkdown();
+                    return r;
+                };
+
                 return result;
             };
 
