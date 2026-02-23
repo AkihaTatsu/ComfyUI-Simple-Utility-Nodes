@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Simple Global Image Preview — Live Viewer</title>
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -407,12 +410,18 @@
     }
 
     function showImageFromUrl(url, label) {
+        img.onload = () => {
+            img.style.display = 'block';
+            placeholder.style.display = 'none';
+            infoLeft.textContent = label;
+            infoRight.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+            applyFit();
+        };
+        img.onerror = () => {
+            console.warn('Image load failed:', url);
+            infoRight.textContent = 'Image load error — retrying…';
+        };
         img.src = url;
-        img.style.display = 'block';
-        placeholder.style.display = 'none';
-        infoLeft.textContent = label;
-        infoRight.textContent = 'Updated: ' + new Date().toLocaleTimeString();
-        applyFit();
     }
 
     function showExecutedImage(info) {
@@ -566,8 +575,22 @@
      * ═══════════════════════════════════════════════════════ */
     const rerunMode   = document.getElementById('rerunMode');
 
-    // Unique per-tab identifier — survives page reloads within the same tab
-    const TAB_ID = crypto.randomUUID();
+    // Unique per-tab identifier — survives page reloads within the same tab.
+    // NOTE: crypto.randomUUID() requires a Secure Context (HTTPS or localhost).
+    // On plain HTTP from a LAN IP (e.g. 192.168.x.x) it throws a TypeError,
+    // which would kill the entire script.  Fall back to a manual UUID.
+    function _generateUUID() {
+        try {
+            return crypto.randomUUID();
+        } catch(e) {
+            // Fallback for insecure contexts (plain HTTP on LAN IPs)
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = (Math.random() * 16) | 0;
+                return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+            });
+        }
+    }
+    const TAB_ID = _generateUUID();
 
     // Button labels
     const LABELS = { same: '⟳ Rerun (Same Task)', new: '⟳ Rerun (New Task)' };
@@ -633,6 +656,7 @@
                     mode: getMode(),
                     rerun_id: rerunId,
                 }),
+                cache: 'no-store',
             });
 
             if (!resp.ok) {
@@ -701,6 +725,7 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ interrupt_id: interruptId }),
+                cache: 'no-store',
             });
             if (!resp.ok) {
                 console.warn('Interrupt failed:', resp.statusText);
@@ -714,13 +739,19 @@
     });
 
     /* ═══════════════════════════════════════════════════════
-     * HTTP polling
+     * HTTP polling — always bypass browser cache
+     *
+     * Without {cache:'no-store'}, browsers may apply heuristic
+     * caching on non-loopback origins (LAN IPs), causing stale
+     * responses while 127.0.0.1 works fine.
      * ═══════════════════════════════════════════════════════ */
+    const FETCH_OPTS = { cache: 'no-store' };
+
     async function pollLoop() {
         while (isPolling) {
             try {
                 // Fetch image + preview counters
-                const resp = await fetch('/simple_utility/global_image_preview/latest');
+                const resp = await fetch('/simple_utility/global_image_preview/latest', FETCH_OPTS);
                 if (resp.ok) {
                     connDot.classList.remove('disconnected');
                     const data = await resp.json();
@@ -740,7 +771,8 @@
                         if (data.has_preview_blob) {
                             try {
                                 const previewResp = await fetch(
-                                    '/simple_utility/global_image_preview/latest_preview'
+                                    '/simple_utility/global_image_preview/latest_preview',
+                                    FETCH_OPTS
                                 );
                                 if (previewResp.ok) {
                                     const blob = await previewResp.blob();
@@ -755,7 +787,7 @@
 
                 // Fetch workflow status
                 try {
-                    const sr = await fetch('/simple_utility/global_image_preview/status');
+                    const sr = await fetch('/simple_utility/global_image_preview/status', FETCH_OPTS);
                     if (sr.ok) updateWorkflowStatus(await sr.json());
                 } catch(e) {}
             } catch(e) {

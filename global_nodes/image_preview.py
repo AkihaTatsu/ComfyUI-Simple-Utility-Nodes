@@ -569,6 +569,16 @@ def _register_routes() -> None:
 
     routes = PromptServer.instance.routes
 
+    # All polling endpoints MUST include Cache-Control: no-store.
+    # Without it, browsers may apply heuristic caching for non-loopback
+    # origins (e.g. LAN IPs like 192.168.x.x) while bypassing cache for
+    # 127.0.0.1, causing the standalone viewer to never refresh on LAN.
+    _NO_CACHE_HDRS = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+
     @routes.get("/simple_utility/global_image_preview/latest")
     async def _api_latest(request):
         """Return the latest executed-event images as JSON."""
@@ -579,19 +589,19 @@ def _register_routes() -> None:
             "images_counter": images_counter,
             "has_preview_blob": blob is not None,
             "preview_counter": preview_counter,
-        })
+        }, headers=_NO_CACHE_HDRS)
 
     @routes.get("/simple_utility/global_image_preview/latest_preview")
     async def _api_latest_preview(request):
         """Return the latest KSampler step preview as raw JPEG."""
         blob, counter = get_latest_preview_blob()
         if blob is None:
-            return web.Response(status=204)  # No content yet
+            return web.Response(status=204, headers=_NO_CACHE_HDRS)
         return web.Response(
             body=blob,
             content_type="image/jpeg",
             headers={
-                "Cache-Control": "no-cache, no-store",
+                **_NO_CACHE_HDRS,
                 "X-Preview-Counter": str(counter),
             },
         )
@@ -605,7 +615,7 @@ def _register_routes() -> None:
             st["queue_pending"] = PromptServer.instance.prompt_queue.get_tasks_remaining()
         except Exception:
             st["queue_pending"] = 0
-        return web.json_response(st)
+        return web.json_response(st, headers=_NO_CACHE_HDRS)
 
     @routes.post("/simple_utility/global_image_preview/rerun")
     async def _api_rerun(request):
@@ -829,13 +839,32 @@ def _register_routes() -> None:
 
     @routes.get("/simple_utility/global_image_preview/viewer")
     async def _viewer_page(request):
-        """Serve the fullscreen auto-updating viewer HTML page."""
+        """Serve the fullscreen auto-updating viewer HTML page.
+
+        The response MUST include ``Cache-Control: no-cache`` so browsers
+        always revalidate (or re-fetch) the viewer HTML.  Without this,
+        browsers may heuristically cache the HTML using the ``Last-Modified``
+        date and serve a stale copy — particularly on non-loopback origins
+        (LAN IPs) where some browsers are more aggressive with caching.
+        """
         html_path = os.path.join(
             os.path.dirname(__file__), "..", "web", "global_image_preview_viewer.html"
         )
         html_path = os.path.normpath(html_path)
         if os.path.isfile(html_path):
-            return web.FileResponse(html_path)
+            # Read the file and return as a normal Response with cache headers
+            # instead of FileResponse, because FileResponse does not allow
+            # overriding Cache-Control (it only sets ETag/Last-Modified).
+            try:
+                with open(html_path, "r", encoding="utf-8") as f:
+                    html_content = f.read()
+                return web.Response(
+                    text=html_content,
+                    content_type="text/html; charset=utf-8",
+                    headers=_NO_CACHE_HDRS,
+                )
+            except Exception:
+                return web.FileResponse(html_path)
         return web.Response(
             text="<html><body><h1>Viewer HTML not found</h1></body></html>",
             content_type="text/html",
