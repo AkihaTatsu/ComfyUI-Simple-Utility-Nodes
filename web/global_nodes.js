@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { installPassthroughTypeResolver } from "./type_resolver.js";
 
 app.registerExtension({
     name: "SimpleUtility.GlobalNodes",
@@ -21,6 +22,12 @@ app.registerExtension({
                 
                 return result;
             };
+        }
+
+        // Auto-type-resolving for SimpleGlobalVariableInput
+        // Input slot 1 = 'anything' (optional passthrough), Output slot 0 = 'passthrough'
+        if (nodeData.name === "SimpleGlobalVariableInput") {
+            installPassthroughTypeResolver(nodeType, 1, 0);
         }
 
         // ── SimpleGlobalImagePreview ──────────────────────────────

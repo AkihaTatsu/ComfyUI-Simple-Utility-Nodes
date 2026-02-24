@@ -1,9 +1,14 @@
 import { app } from "../../scripts/app.js";
+import {
+    installSwitchTypeResolver,
+    installInversedSwitchTypeResolver
+} from "./type_resolver.js";
 
 app.registerExtension({
     name: "SimpleUtility.SwitchNodes",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name === "SimpleSwitchWithRandomMode") {
+            installSwitchTypeResolver(nodeType);
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const result = onNodeCreated ? onNodeCreated.apply(this, []) : undefined;
@@ -81,6 +86,7 @@ app.registerExtension({
         }
         
         if (nodeData.name === "SimpleInversedSwitchWithRandomMode") {
+            installInversedSwitchTypeResolver(nodeType);
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const result = onNodeCreated ? onNodeCreated.apply(this, []) : undefined;

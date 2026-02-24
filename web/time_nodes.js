@@ -1,10 +1,12 @@
 import { app } from "../../scripts/app.js";
 import { ComfyWidgets } from "../../scripts/widgets.js";
+import { installPassthroughTypeResolver } from "./type_resolver.js";
 
 app.registerExtension({
     name: "SimpleUtility.TimeNodes",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name === "SimpleTimer") {
+            installPassthroughTypeResolver(nodeType, 0, 0);
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const result = onNodeCreated ? onNodeCreated.apply(this, []) : undefined;
@@ -38,6 +40,7 @@ app.registerExtension({
         }
         
         if (nodeData.name === "SimpleCurrentDatetime") {
+            installPassthroughTypeResolver(nodeType, 0, 0);
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const result = onNodeCreated ? onNodeCreated.apply(this, []) : undefined;

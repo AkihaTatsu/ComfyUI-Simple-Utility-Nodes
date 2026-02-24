@@ -1,8 +1,13 @@
 import { app } from "../../scripts/app.js";
+import { installPassthroughTypeResolver } from "./type_resolver.js";
 
 app.registerExtension({
     name: "SimpleUtility.ScriptNodes",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
+        if (nodeData.name === "SimplePrintToConsole") {
+            installPassthroughTypeResolver(nodeType, 0, 0);
+        }
+
         if (nodeData.name === "SimplePythonScript") {
             // Measure the title width using a canvas context for accuracy
             const _measureTitleWidth = function () {
