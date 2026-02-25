@@ -34,6 +34,12 @@ _PERSIST_PATH = os.path.normpath(os.path.join(_PERSIST_DIR, "last_prompt.json"))
 _latest_images: List[Dict[str, str]] = []
 _latest_images_lock = threading.Lock()
 _latest_images_counter: int = 0  # bumped each time new executed images arrive
+
+# Rolling history buffer — keeps the last N image batches so that the
+# standalone viewer never misses images between its 300 ms poll cycles.
+_image_history: List[tuple] = []  # [(counter, images_list), ...]
+_IMAGE_HISTORY_MAX = 200
+
 _latest_preview_blob: bytes | None = None
 _latest_preview_lock = threading.Lock()
 _latest_preview_counter: int = 0  # bumped each time a new blob arrives
@@ -45,11 +51,24 @@ def _set_latest_images(images: List[Dict[str, str]]) -> None:
         _latest_images.clear()
         _latest_images.extend(images)
         _latest_images_counter += 1
+        _image_history.append((_latest_images_counter, list(images)))
+        if len(_image_history) > _IMAGE_HISTORY_MAX:
+            del _image_history[:len(_image_history) - _IMAGE_HISTORY_MAX]
 
 
 def get_latest_images() -> tuple[List[Dict[str, str]], int]:
     with _latest_images_lock:
         return list(_latest_images), _latest_images_counter
+
+
+def get_images_since(since_counter: int) -> tuple[list, int]:
+    """Return all image batches whose counter is > *since_counter*.
+
+    Returns ``([(counter, images_list), ...], current_counter)``.
+    """
+    with _latest_images_lock:
+        result = [(c, imgs) for c, imgs in _image_history if c > since_counter]
+        return result, _latest_images_counter
 
 
 def _set_latest_preview_blob(blob: bytes) -> None:
@@ -581,15 +600,38 @@ def _register_routes() -> None:
 
     @routes.get("/simple_utility/global_image_preview/latest")
     async def _api_latest(request):
-        """Return the latest executed-event images as JSON."""
+        """Return the latest executed-event images as JSON.
+
+        Query parameters:
+            since (int, optional): If provided, the response includes a
+                ``new_batches`` list with every image batch whose counter
+                is greater than *since*.  This lets the viewer catch up
+                on ALL images produced since its last poll — including
+                batches from Save Image, Preview Image, and any other
+                node that outputs images.
+        """
         images, images_counter = get_latest_images()
         blob, preview_counter = get_latest_preview_blob()
-        return web.json_response({
+        payload = {
             "images": images,
             "images_counter": images_counter,
             "has_preview_blob": blob is not None,
             "preview_counter": preview_counter,
-        }, headers=_NO_CACHE_HDRS)
+        }
+        # If the viewer passes ?since=N we return all batches missed
+        since_raw = request.query.get("since")
+        if since_raw is not None:
+            try:
+                since = int(since_raw)
+            except (ValueError, TypeError):
+                since = 0
+            if since > 0:
+                entries, _ = get_images_since(since)
+                payload["new_batches"] = [
+                    {"counter": c, "images": imgs}
+                    for c, imgs in entries
+                ]
+        return web.json_response(payload, headers=_NO_CACHE_HDRS)
 
     @routes.get("/simple_utility/global_image_preview/latest_preview")
     async def _api_latest_preview(request):

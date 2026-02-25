@@ -1,336 +1,487 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Simple Global Image Preview — Live Viewer</title>
     <style>
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+/* ================================================================
+   CSS RESET & VARIABLES
+   ================================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-        :root {
-            --bg: #1a1a2e;
-            --bg-panel: #16213e;
-            --accent: #0f3460;
-            --text: #e0e0e0;
-            --text-dim: #8899aa;
-            --border: #0f3460;
-            --green: #4ecca3;
-            --red: #e74c3c;
-            --yellow: #f0c040;
-            --orange: #e67e22;
-        }
+:root {
+    --bg:        #1a1a2e;
+    --bg-panel:  #16213e;
+    --bg-hover:  #1a4a80;
+    --accent:    #0f3460;
+    --text:      #e0e0e0;
+    --text-dim:  #8899aa;
+    --border:    #0f3460;
+    --green:     #4ecca3;
+    --red:       #e74c3c;
+    --orange:    #e67e22;
+    --overlay:   rgba(0, 0, 0, 0.75);
 
-        body {
-            background: var(--bg);
-            color: var(--text);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            height: 100vh;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
+    --history-w: 180px;
+    --radius:    4px;
+}
 
-        /* ── Top bar ────────────────────────────────────────── */
-        .top-bar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 6px 16px;
-            background: var(--bg-panel);
-            border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
-            z-index: 10;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
 
-        /* Left section: title + status */
-        .top-left {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            min-width: 0;
-        }
-        .top-left h1 {
-            font-size: 15px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 7px;
-            white-space: nowrap;
-        }
+button { font-family: inherit; }
+select { font-family: inherit; }
 
-        /* Workflow status chip */
-        .wf-status {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 13px;
-            padding: 3px 10px;
-            border-radius: 12px;
-            white-space: nowrap;
-            border: 1px solid var(--border);
-            background: rgba(255,255,255,0.04);
-        }
-        .wf-status .dot {
-            width: 8px; height: 8px;
-            border-radius: 50%;
-            flex-shrink: 0;
-        }
-        .wf-status.idle .dot    { background: var(--text-dim); }
-        .wf-status.running .dot { background: var(--green); animation: pulse 1.2s infinite; }
-        .wf-status.idle   { color: var(--text-dim); }
-        .wf-status.running { color: var(--green); }
-        .wf-node {
-            max-width: 260px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
+/* ================================================================
+   REGION 1 — HEADER BAR
+   Groups: [Title + Connection] [Status + Node] [Controls]
+   ================================================================ */
+.header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 12px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    z-index: 100;
+    flex-wrap: wrap;
+}
 
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.3; }
-        }
+.hdr-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
 
-        /* Right section: controls */
-        .top-right {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-shrink: 0;
-        }
-        .top-right label {
-            font-size: 13px;
-            color: var(--text-dim);
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .top-right select {
-            background: var(--accent);
-            color: var(--text);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 3px 6px;
-            font-size: 13px;
-        }
-        .top-right button {
-            background: var(--accent);
-            color: var(--text);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 4px 12px;
-            cursor: pointer;
-            font-size: 13px;
-            white-space: nowrap;
-        }
-        .top-right button:hover { background: #1a4a80; }
-        .top-right button.active { background: var(--green); color: #111; }
+.conn-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: var(--green);
+    display: inline-block;
+    flex-shrink: 0;
+}
+.conn-dot.disconnected { background: var(--red); }
 
-        /* Rerun split-button group */
-        .rerun-group {
-            display: flex;
-            align-items: stretch;
-            border-radius: 4px;
-            overflow: hidden;
-        }
-        #rerunBtn {
-            background: var(--orange);
-            color: #fff;
-            border: 1px solid var(--orange);
-            border-right: none;
-            border-radius: 4px 0 0 4px;
-            font-weight: 600;
-            padding: 4px 12px;
-            cursor: pointer;
-            font-size: 13px;
-            white-space: nowrap;
-        }
-        #rerunBtn:hover { background: #cf6d17; }
-        #rerunBtn:disabled { opacity: 0.4; cursor: not-allowed; }
-        #rerunMode {
-            background: var(--orange);
-            color: #fff;
-            border: 1px solid var(--orange);
-            border-left: 1px solid rgba(255,255,255,0.25);
-            border-radius: 0 4px 4px 0;
-            padding: 2px 2px;
-            cursor: pointer;
-            font-size: 12px;
-            -webkit-appearance: none;
-            appearance: none;
-            min-width: 0;
-            width: auto;
-            padding: 2px 6px;
-            outline: none;
-        }
-        #rerunMode:hover { background: #cf6d17; }
-        #rerunMode option { background: var(--bg-panel); color: var(--text); }
+.hdr-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    padding: 2px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.04);
+    white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
+}
+.hdr-status .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.hdr-status.idle    { color: var(--text-dim); }
+.hdr-status.idle .dot    { background: var(--text-dim); }
+.hdr-status.running { color: var(--green); }
+.hdr-status.running .dot { background: var(--green); animation: pulse 1.2s infinite; }
 
-        /* Interrupt button */
-        #interruptBtn {
-            background: var(--red);
-            color: #fff;
-            border: 1px solid var(--red);
-            border-radius: 4px;
-            font-weight: 600;
-            padding: 4px 10px;
-            cursor: pointer;
-            font-size: 13px;
-            white-space: nowrap;
-            line-height: 1.2;
-        }
-        #interruptBtn:hover { background: #c0392b; }
-        #interruptBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+.wf-node {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 240px;
+}
 
-        /* Connection dot in title */
-        .conn-dot {
-            width: 9px; height: 9px;
-            border-radius: 50%;
-            background: var(--green);
-            display: inline-block;
-        }
-        .conn-dot.disconnected { background: var(--red); }
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.3; }
+}
 
-        /* ── Image area ─────────────────────────────────────── */
-        main {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-            position: relative;
-        }
-        main.scrollable {
-            overflow: auto;
-        }
+/* — Controls group — */
+.hdr-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
 
-        #imageContainer {
-            position: relative;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 100%;
-            height: 100%;
-        }
+.menu-toggle {
+    display: none;
+    background: var(--accent);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 9px;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    flex-shrink: 0;
+    margin-left: auto;
+}
 
-        #previewImage {
-            image-rendering: auto;
-            /* default: no special sizing — applyFit() sets inline styles + class */
-        }
+.hdr-controls button,
+.hdr-controls select {
+    background: var(--accent);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.hdr-controls button:hover { background: var(--bg-hover); }
+.hdr-controls button.active { background: var(--green); color: #111; }
 
-        /*  Contain  — shrink if too big, otherwise stay at natural size, centered */
-        #previewImage.fit-contain {
-            max-width: 100%;
-            max-height: 100%;
-            width: auto;
-            height: auto;
-            object-fit: contain;
-        }
+.hdr-controls label {
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
 
-        /*  Fill  — always stretch to fill viewport (no crop) */
-        #previewImage.fit-fill {
-            width: 100%;
-            height: 100%;
-            max-width: none;
-            max-height: none;
-            object-fit: contain;
-        }
+#interruptBtn {
+    background: var(--red); color: #fff;
+    border-color: var(--red); font-weight: 600;
+}
+#interruptBtn:hover { background: #c0392b; }
+#interruptBtn:disabled { opacity: 0.35; cursor: not-allowed; }
 
-        /*  Actual Size  — natural size, scroll to view */
-        #previewImage.fit-actual {
-            max-width: none;
-            max-height: none;
-            width: auto;
-            height: auto;
-            object-fit: none;
-            cursor: grab;
-        }
-        #previewImage.dragging { cursor: grabbing; }
+.rerun-group {
+    display: flex;
+    align-items: stretch;
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+#rerunBtn {
+    background: var(--orange); color: #fff;
+    border: 1px solid var(--orange); border-right: none;
+    border-radius: var(--radius) 0 0 var(--radius);
+    font-weight: 600; padding: 4px 10px;
+    cursor: pointer; font-size: 12px; white-space: nowrap;
+}
+#rerunBtn:hover { background: #cf6d17; }
+#rerunBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+#rerunMode {
+    background: var(--orange); color: #fff;
+    border: 1px solid var(--orange);
+    border-left: 1px solid rgba(255,255,255,0.25);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 2px 6px; cursor: pointer; font-size: 11px;
+    -webkit-appearance: none; appearance: none; outline: none;
+}
+#rerunMode:hover { background: #cf6d17; }
+#rerunMode option { background: var(--bg-panel); color: var(--text); }
 
-        .placeholder {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 12px;
-            color: var(--text-dim);
-        }
-        .placeholder svg { opacity: 0.3; }
-        .placeholder p { font-size: 14px; }
+/* ================================================================
+   REGION 2 — CONTENT (viewer + history side by side)
+   ================================================================ */
+.content {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    overflow: hidden;
+}
 
-        /* ── Footer ─────────────────────────────────────────── */
-        footer {
-            padding: 4px 16px;
-            background: var(--bg-panel);
-            border-top: 1px solid var(--border);
-            font-size: 12px;
-            color: var(--text-dim);
-            display: flex;
-            justify-content: space-between;
-            flex-shrink: 0;
-        }
+.viewer-pane {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    min-width: 0;
+    position: relative;
+}
+.viewer-pane.scrollable {
+    overflow: auto;
+}
 
-        /* ── History sidebar ────────────────────────────────── */
-        #historySidebar {
-            position: absolute;
-            top: 0; right: 0;
-            width: 180px;
-            height: 100%;
-            background: var(--bg-panel);
-            border-left: 1px solid var(--border);
-            overflow-y: auto;
-            display: none;
-            flex-direction: column;
-            z-index: 5;
-        }
-        #historySidebar.open { display: flex; }
-        #historySidebar h3 {
-            padding: 8px;
-            font-size: 13px;
-            border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
-        }
-        .history-list {
-            flex: 1;
-            overflow-y: auto;
-            padding: 4px;
-        }
-        .history-item {
-            width: 100%;
-            padding: 2px;
-            cursor: pointer;
-            border: 2px solid transparent;
-            border-radius: 4px;
-            margin-bottom: 4px;
-        }
-        .history-item.selected { border-color: var(--green); }
-        .history-item img {
-            width: 100%;
-            height: auto;
-            border-radius: 3px;
-            display: block;
-        }
+#imageContainer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+}
+
+#previewImage {
+    image-rendering: auto;
+    display: none;
+}
+
+#previewImage.fit-contain {
+    max-width: 100%; max-height: 100%;
+    width: auto; height: auto;
+    object-fit: contain;
+}
+#previewImage.fit-fill {
+    width: 100%; height: 100%;
+    max-width: none; max-height: none;
+    object-fit: contain;
+}
+#previewImage.fit-actual {
+    max-width: none; max-height: none;
+    width: auto; height: auto;
+    object-fit: none;
+    cursor: grab;
+}
+#previewImage.dragging { cursor: grabbing; }
+#previewImage.pannable { cursor: grab; }
+
+.placeholder {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 12px;
+    color: var(--text-dim);
+    text-align: center;
+    padding: 20px;
+}
+.placeholder svg { opacity: 0.3; }
+.placeholder p { font-size: 14px; }
+.placeholder .sub { font-size: 12px; }
+
+/* — History panel — */
+.history-panel {
+    width: var(--history-w);
+    background: var(--bg-panel);
+    border-left: 1px solid var(--border);
+    display: none;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+.history-panel.open { display: flex; }
+
+.history-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    font-size: 13px;
+    font-weight: 600;
+}
+.history-header button {
+    background: none;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 2px 8px;
+    cursor: pointer;
+    font-size: 11px;
+}
+.history-header button:hover { color: var(--red); border-color: var(--red); }
+
+.history-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.history-item {
+    width: 100%; padding: 2px;
+    cursor: pointer;
+    border: 2px solid transparent;
+    border-radius: var(--radius);
+    margin-bottom: 4px;
+}
+.history-item:hover { border-color: rgba(255,255,255,0.15); }
+.history-item img {
+    width: 100%; height: auto;
+    border-radius: 3px; display: block;
+}
+
+/* ================================================================
+   REGION 3 — FOOTER
+   ================================================================ */
+.footer {
+    padding: 3px 12px;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 8px;
+    min-height: 24px;
+}
+.footer span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ================================================================
+   LIGHTBOX — ComfyUI Image Feed style
+   ================================================================ */
+.lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: var(--overlay);
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+.lightbox.open { display: flex; }
+
+.lightbox-inner {
+    position: relative;
+    max-width: 92vw;
+    max-height: 92vh;
+    cursor: default;
+}
+.lightbox-inner img {
+    max-width: 92vw;
+    max-height: 86vh;
+    object-fit: contain;
+    border-radius: 6px;
+    display: block;
+    cursor: pointer;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+}
+.lightbox-close {
+    position: fixed;
+    top: 16px; right: 16px;
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--bg-panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; z-index: 1001; line-height: 1;
+}
+.lightbox-close:hover { background: var(--red); border-color: var(--red); }
+
+.lightbox-info {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-top: 6px;
+    pointer-events: none;
+}
+
+/* ================================================================
+   RESPONSIVE — Tablet (≤ 900px)
+   ================================================================ */
+@media (max-width: 900px) {
+    .header { padding: 5px 10px; gap: 8px; }
+    .hdr-title { font-size: 13px; }
+    .wf-node { max-width: 160px; }
+    .hdr-controls button, .hdr-controls select,
+    #rerunBtn, #rerunMode, #interruptBtn { font-size: 11px; padding: 4px 8px; }
+    :root { --history-w: 150px; }
+}
+
+/* ================================================================
+   RESPONSIVE — Mobile (≤ 640px)
+   ================================================================ */
+@media (max-width: 640px) {
+    .header { padding: 4px 8px; gap: 4px; }
+    .hdr-title { font-size: 12px; gap: 5px; }
+
+    .hdr-status { font-size: 11px; padding: 2px 6px; }
+    .wf-node { max-width: 120px; font-size: 10px; }
+
+    .menu-toggle { display: flex; align-items: center; justify-content: center; }
+
+    .hdr-controls {
+        display: none;
+        flex-basis: 100%;
+        border-top: 1px solid var(--border);
+        padding: 6px 0 2px;
+        gap: 6px;
+    }
+    .hdr-controls.mobile-open { display: flex; }
+    .hdr-controls button, .hdr-controls select { min-height: 34px; font-size: 12px; }
+    #rerunBtn { min-height: 34px; font-size: 12px; padding: 5px 8px; }
+    #rerunMode { min-height: 34px; }
+    #interruptBtn { min-height: 34px; font-size: 12px; padding: 5px 8px; }
+
+    /* Content column layout: image on top, history below */
+    .content { flex-direction: column; }
+
+    .history-panel {
+        width: 100%;
+        max-height: 35vh;
+        border-left: none;
+        border-top: 1px solid var(--border);
+    }
+    .history-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+        gap: 4px; padding: 4px;
+    }
+
+    .footer { padding: 3px 8px; font-size: 10px; }
+}
+
+/* ================================================================
+   RESPONSIVE — Very small (≤ 380px)
+   ================================================================ */
+@media (max-width: 380px) {
+    .hdr-title { font-size: 11px; }
+    .hdr-status { font-size: 10px; }
+    .wf-node { max-width: 80px; }
+    .hdr-controls button, .hdr-controls select,
+    #rerunBtn, #rerunMode, #interruptBtn { font-size: 11px; min-height: 32px; }
+}
+
+/* ================================================================
+   TOUCH-FRIENDLY — coarse pointer devices
+   ================================================================ */
+@media (pointer: coarse) {
+    .hdr-controls button, .hdr-controls select,
+    #rerunBtn, #rerunMode, #interruptBtn,
+    .menu-toggle, #historyBtn {
+        min-height: 38px; min-width: 38px;
+    }
+    .history-item { padding: 3px; margin-bottom: 5px; }
+    .lightbox-close { width: 38px; height: 38px; font-size: 20px; top: 12px; right: 12px; }
+}
     </style>
 </head>
 <body>
 
-<!-- ── Top bar ── -->
-<div class="top-bar">
-    <div class="top-left">
-        <h1>
-            <span class="conn-dot" id="connDot"></span>
-            ⛏️ Global Image Preview
-        </h1>
-        <div class="wf-status idle" id="wfStatus">
-            <span class="dot"></span>
-            <span id="wfLabel">Idle</span>
-            <span class="wf-node" id="wfNode"></span>
-        </div>
+<!-- ═══════ REGION 1 — HEADER ═══════ -->
+<header class="header">
+    <div class="hdr-title">
+        <span class="conn-dot disconnected" id="connDot"></span>
+        <span>⛏️ Global Image Preview</span>
     </div>
-    <div class="top-right">
+
+    <div class="hdr-status idle" id="wfStatus">
+        <span class="dot"></span>
+        <span id="wfLabel">Idle</span>
+        <span class="wf-node" id="wfNode"></span>
+    </div>
+
+    <button class="menu-toggle" id="menuToggle" title="Toggle controls">☰</button>
+
+    <div class="hdr-controls" id="hdrControls">
         <button id="interruptBtn" disabled title="Interrupt the current running workflow">✕ Interrupt</button>
         <div class="rerun-group">
             <button id="rerunBtn" title="Interrupt (if running) and rerun the last workflow">⟳ Rerun (Same Task)</button>
@@ -339,8 +490,7 @@
                 <option value="new">▾ New Task</option>
             </select>
         </div>
-        <label>
-            Fit
+        <label>Fit
             <select id="fitMode">
                 <option value="contain">Contain</option>
                 <option value="fill">Fill</option>
@@ -349,459 +499,596 @@
         </label>
         <button id="historyBtn" title="Toggle history panel">History</button>
     </div>
-</div>
+</header>
 
-<main>
-    <div id="imageContainer">
-        <div class="placeholder" id="placeholder">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <rect x="3" y="3" width="18" height="18" rx="2"/>
-                <circle cx="8.5" cy="8.5" r="1.5"/>
-                <polyline points="21 15 16 10 5 21"/>
-            </svg>
-            <p>Waiting for images…</p>
-            <p style="font-size:12px">Run a workflow with preview / save image nodes</p>
+<!-- ═══════ REGION 2 — CONTENT ═══════ -->
+<div class="content">
+    <div class="viewer-pane" id="viewerPane">
+        <div id="imageContainer">
+            <div class="placeholder" id="placeholder">
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="1.5">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/>
+                    <circle cx="8.5" cy="8.5" r="1.5"/>
+                    <polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <p>Waiting for images…</p>
+                <p class="sub">Run a workflow with preview / save image nodes</p>
+            </div>
+            <img id="previewImage" alt="Preview"/>
         </div>
-        <img id="previewImage" style="display:none;" alt="Preview"/>
     </div>
-    <div id="historySidebar">
-        <h3>History</h3>
+
+    <div class="history-panel" id="historyPanel">
+        <div class="history-header">
+            <span>History</span>
+            <button id="historyClearBtn" title="Clear history">🗑 Clear</button>
+        </div>
         <div class="history-list" id="historyList"></div>
     </div>
-</main>
+</div>
 
-<footer>
+<!-- ═══════ REGION 3 — FOOTER ═══════ -->
+<footer class="footer">
     <span id="infoLeft">No image</span>
     <span id="infoRight">Polling…</span>
 </footer>
 
+<!-- ═══════ LIGHTBOX ═══════ -->
+<div class="lightbox" id="lightbox">
+    <div class="lightbox-inner" id="lightboxInner">
+        <button class="lightbox-close" id="lightboxClose">✕</button>
+        <img id="lightboxImg" alt="Full preview"/>
+        <div class="lightbox-info" id="lightboxInfo"></div>
+    </div>
+</div>
+
+<!-- ═══════ JAVASCRIPT ═══════ -->
 <script>
-(function() {
-    /* ── Elements ── */
-    const img            = document.getElementById('previewImage');
-    const placeholder    = document.getElementById('placeholder');
-    const fitMode        = document.getElementById('fitMode');
-    const historyBtn     = document.getElementById('historyBtn');
-    const historySidebar  = document.getElementById('historySidebar');
-    const historyList    = document.getElementById('historyList');
-    const connDot        = document.getElementById('connDot');
-    const infoLeft       = document.getElementById('infoLeft');
-    const infoRight      = document.getElementById('infoRight');
-    const wfStatus       = document.getElementById('wfStatus');
-    const wfLabel        = document.getElementById('wfLabel');
-    const wfNode         = document.getElementById('wfNode');
-    const rerunBtn       = document.getElementById('rerunBtn');
-    const interruptBtn   = document.getElementById('interruptBtn');
+(function () {
+"use strict";
 
-    /* ── State ── */
-    let lastKey            = null;
-    let history            = [];
-    const MAX_HISTORY      = 50;
-    let currentBlobUrl     = null;
-    let lastImagesCounter  = -1;
-    let lastPreviewCounter = -1;
-    let isPolling          = true;
+/* ── DOM ── */
+const $img           = document.getElementById('previewImage');
+const $placeholder   = document.getElementById('placeholder');
+const $fitMode       = document.getElementById('fitMode');
+const $historyBtn    = document.getElementById('historyBtn');
+const $historyPanel  = document.getElementById('historyPanel');
+const $historyList   = document.getElementById('historyList');
+const $historyClear  = document.getElementById('historyClearBtn');
+const $connDot       = document.getElementById('connDot');
+const $infoLeft      = document.getElementById('infoLeft');
+const $infoRight     = document.getElementById('infoRight');
+const $wfStatus      = document.getElementById('wfStatus');
+const $wfLabel       = document.getElementById('wfLabel');
+const $wfNode        = document.getElementById('wfNode');
+const $rerunBtn      = document.getElementById('rerunBtn');
+const $rerunMode     = document.getElementById('rerunMode');
+const $interruptBtn  = document.getElementById('interruptBtn');
+const $menuToggle    = document.getElementById('menuToggle');
+const $hdrControls   = document.getElementById('hdrControls');
+const $viewerPane    = document.getElementById('viewerPane');
+const $lightbox      = document.getElementById('lightbox');
+const $lightboxImg   = document.getElementById('lightboxImg');
+const $lightboxClose = document.getElementById('lightboxClose');
+const $lightboxInfo  = document.getElementById('lightboxInfo');
 
-    /* ── Helpers ── */
-    function viewUrl(info) {
-        return `/view?filename=${encodeURIComponent(info.filename)}`
-             + `&type=${encodeURIComponent(info.type)}`
-             + `&subfolder=${encodeURIComponent(info.subfolder || '')}`;
+/* ── STATE ── */
+let lastKey = null;
+let historyItems = [];
+const MAX_HISTORY = 50;
+let currentBlobUrl = null;
+let lastImagesCounter = -1;
+let lastPreviewCounter = -1;
+let isPolling = true;
+
+const HISTORY_CLEAR_COUNTER_KEY = 'simpleutility.globalpreview.historyClearCounter';
+
+function readHistoryClearCounter() {
+    try {
+        const raw = localStorage.getItem(HISTORY_CLEAR_COUNTER_KEY);
+        if (raw === null) return -1;
+        const parsed = Number.parseInt(raw, 10);
+        return Number.isFinite(parsed) ? parsed : -1;
+    } catch (_) {
+        return -1;
     }
+}
 
-    function showImageFromUrl(url, label) {
-        img.onload = () => {
-            img.style.display = 'block';
-            placeholder.style.display = 'none';
-            infoLeft.textContent = label;
-            infoRight.textContent = 'Updated: ' + new Date().toLocaleTimeString();
-            applyFit();
-        };
-        img.onerror = () => {
-            console.warn('Image load failed:', url);
-            infoRight.textContent = 'Image load error — retrying…';
-        };
-        img.src = url;
+function writeHistoryClearCounter(counter) {
+    try {
+        localStorage.setItem(HISTORY_CLEAR_COUNTER_KEY, String(counter));
+    } catch (_) {}
+}
+
+lastImagesCounter = Math.max(lastImagesCounter, readHistoryClearCounter());
+
+/* ── HELPERS ── */
+function viewUrl(info) {
+    return `/view?filename=${encodeURIComponent(info.filename)}`
+         + `&type=${encodeURIComponent(info.type)}`
+         + `&subfolder=${encodeURIComponent(info.subfolder || '')}`;
+}
+function fullUrl(info) { return viewUrl(info) + '&t=' + Date.now(); }
+
+/* ── IMAGE DISPLAY ── */
+function showImageFromUrl(url, label) {
+    $img.onload = () => {
+        $img.style.display = 'block';
+        $placeholder.style.display = 'none';
+        $infoLeft.textContent = label;
+        $infoRight.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+        applyFit();
+    };
+    $img.onerror = () => {
+        console.warn('Image load failed:', url);
+        $infoRight.textContent = 'Image load error — retrying…';
+    };
+    $img.src = url;
+}
+
+function showExecutedImage(info) {
+    const key = `${info.type}/${info.subfolder || ''}/${info.filename}`;
+    if (key === lastKey) return;
+    lastKey = key;
+    const url = fullUrl(info);
+    showImageFromUrl(url, `${info.filename}  (${info.type})`);
+    addToHistory(info, url);
+}
+
+function showPreviewBlob(blob) {
+    if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+    currentBlobUrl = URL.createObjectURL(blob);
+    lastKey = null;
+    showImageFromUrl(currentBlobUrl, 'KSampler step preview');
+}
+
+/* ── FIT MODES ── */
+let currentScale = 1;
+let panX = 0;
+let panY = 0;
+const MIN_SCALE = 0.5, MAX_SCALE = 5;
+
+function clampPan() {
+    const vw = $viewerPane.clientWidth;
+    const vh = $viewerPane.clientHeight;
+    const iw = $img.offsetWidth;
+    const ih = $img.offsetHeight;
+    const maxPX = Math.max(0, (iw * currentScale - vw) / 2);
+    const maxPY = Math.max(0, (ih * currentScale - vh) / 2);
+    panX = Math.min(maxPX, Math.max(-maxPX, panX));
+    panY = Math.min(maxPY, Math.max(-maxPY, panY));
+}
+
+function applyScaledTransform() {
+    clampPan();
+    $img.style.transform = `translate(${panX}px, ${panY}px) scale(${currentScale})`;
+    $img.style.transformOrigin = 'center center';
+    $img.classList.toggle('pannable', currentScale > 1 && !$img.classList.contains('fit-actual'));
+}
+
+function applyFit() {
+    const mode = $fitMode.value;
+    $img.classList.remove('fit-contain', 'fit-fill', 'fit-actual', 'pannable');
+    $viewerPane.classList.remove('scrollable');
+    $img.style.transform = '';
+    $img.style.transformOrigin = '';
+    currentScale = 1;
+    panX = 0;
+    panY = 0;
+
+    if (mode === 'fill')        $img.classList.add('fit-fill');
+    else if (mode === 'actual') { $img.classList.add('fit-actual'); $viewerPane.classList.add('scrollable'); }
+    else                        $img.classList.add('fit-contain');
+}
+
+$fitMode.addEventListener('change', applyFit);
+
+/* ── HISTORY ── */
+function addToHistory(info, cachedUrl, skipRender) {
+    if (historyItems.length) {
+        const last = historyItems[historyItems.length - 1];
+        if (last.info.filename === info.filename && last.info.type === info.type) return;
     }
+    historyItems.push({ info, cachedUrl: cachedUrl || viewUrl(info) });
+    if (historyItems.length > MAX_HISTORY) historyItems.shift();
+    if (!skipRender) renderHistory();
+}
 
-    function showExecutedImage(info) {
-        const key = `${info.type}/${info.subfolder || ''}/${info.filename}`;
-        if (key === lastKey) return;
-        lastKey = key;
-        showImageFromUrl(viewUrl(info) + '&t=' + Date.now(), `${info.filename}  (${info.type})`);
-        addToHistory(info);
+function renderHistory() {
+    $historyList.innerHTML = '';
+    for (let i = historyItems.length - 1; i >= 0; i--) {
+        const item = historyItems[i];
+        const div = document.createElement('div');
+        div.className = 'history-item';
+        const thumb = document.createElement('img');
+        thumb.src = item.cachedUrl;
+        thumb.loading = 'lazy';
+        thumb.alt = item.info.filename;
+        div.appendChild(thumb);
+        div.addEventListener('click', () => openLightbox(item));
+        $historyList.appendChild(div);
     }
+}
 
-    function showPreviewBlob(blob) {
-        if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
-        currentBlobUrl = URL.createObjectURL(blob);
-        lastKey = null;
-        showImageFromUrl(currentBlobUrl, 'KSampler step preview');
-    }
+$historyBtn.addEventListener('click', () => {
+    $historyPanel.classList.toggle('open');
+    $historyBtn.classList.toggle('active');
+});
 
-    function applyFit() {
-        const mode = fitMode.value;
-        img.classList.remove('fit-contain', 'fit-fill', 'fit-actual');
-        main.classList.remove('scrollable');
+$historyClear.addEventListener('click', () => {
+    historyItems = [];
+    renderHistory();
+    writeHistoryClearCounter(lastImagesCounter);
+});
 
-        if (mode === 'fill') {
-            img.classList.add('fit-fill');
-        } else if (mode === 'actual') {
-            img.classList.add('fit-actual');
-            main.classList.add('scrollable');
-        } else {
-            /* contain (default) — shrink-only */
-            img.classList.add('fit-contain');
-        }
-    }
+/* ── LIGHTBOX ── */
+let lightboxItem = null;
 
-    /* ── History ── */
-    function addToHistory(info) {
-        if (history.length && history[history.length - 1].filename === info.filename
-            && history[history.length - 1].type === info.type) return;
-        history.push(info);
-        if (history.length > MAX_HISTORY) history.shift();
-        renderHistory();
-    }
+function openLightbox(item) {
+    lightboxItem = item;
+    $lightboxImg.src = item.cachedUrl;
+    $lightboxInfo.textContent = `${item.info.filename}  (${item.info.type})`;
+    $lightbox.classList.add('open');
+}
 
-    function renderHistory() {
-        historyList.innerHTML = '';
-        for (let i = history.length - 1; i >= 0; i--) {
-            const info = history[i];
-            const div = document.createElement('div');
-            div.className = 'history-item';
-            const thumb = document.createElement('img');
-            thumb.src = viewUrl(info) + '&preview=webp;60';
-            thumb.loading = 'lazy';
-            div.appendChild(thumb);
-            div.addEventListener('click', () => {
-                showImageFromUrl(viewUrl(info) + '&t=' + Date.now(), `${info.filename}  (${info.type})`);
-            });
-            historyList.appendChild(div);
-        }
-    }
+function closeLightbox() {
+    $lightbox.classList.remove('open');
+    lightboxItem = null;
+}
 
-    historyBtn.addEventListener('click', () => {
-        historySidebar.classList.toggle('open');
-        historyBtn.classList.toggle('active');
-    });
+$lightboxClose.addEventListener('click', (e) => { e.stopPropagation(); closeLightbox(); });
+$lightbox.addEventListener('click', (e) => { if (e.target === $lightbox) closeLightbox(); });
+$lightboxImg.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (lightboxItem) window.open(fullUrl(lightboxItem.info), '_blank');
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $lightbox.classList.contains('open')) closeLightbox();
+});
 
-    fitMode.addEventListener('change', applyFit);
+/* ── MOBILE MENU ── */
+$menuToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    $hdrControls.classList.toggle('mobile-open');
+});
+document.addEventListener('click', (e) => {
+    if (!$hdrControls.contains(e.target) && e.target !== $menuToggle)
+        $hdrControls.classList.remove('mobile-open');
+});
 
-    /* ── Drag-to-pan (Actual Size mode) ── */
-    let isDragging = false, startX, startY, scrollL, scrollT;
-    const main = document.querySelector('main');
-    img.addEventListener('mousedown', (e) => {
-        if (!img.classList.contains('fit-actual')) return;
-        isDragging = true;
-        img.classList.add('dragging');
-        startX = e.clientX; startY = e.clientY;
-        scrollL = main.scrollLeft; scrollT = main.scrollTop;
+/* ── DRAG-TO-PAN (mouse) — Actual Size scroll + Contain/Fill zoom-pan ── */
+let isDragging = false, dragSX, dragSY, scL, scT;
+let isMousePan = false, mousePanSX, mousePanSY, mousePanBX, mousePanBY;
+
+$img.addEventListener('mousedown', (e) => {
+    if ($img.classList.contains('fit-actual')) {
+        isDragging = true; $img.classList.add('dragging');
+        dragSX = e.clientX; dragSY = e.clientY;
+        scL = $viewerPane.scrollLeft; scT = $viewerPane.scrollTop;
         e.preventDefault();
-    });
-    document.addEventListener('mousemove', (e) => {
-        if (!isDragging) return;
-        main.scrollLeft = scrollL - (e.clientX - startX);
-        main.scrollTop  = scrollT - (e.clientY - startY);
-    });
-    document.addEventListener('mouseup', () => {
-        isDragging = false;
-        img.classList.remove('dragging');
-    });
+        return;
+    }
+    if (currentScale > 1) {
+        isMousePan = true; $img.classList.add('dragging');
+        mousePanSX = e.clientX; mousePanSY = e.clientY;
+        mousePanBX = panX; mousePanBY = panY;
+        e.preventDefault();
+    }
+});
+document.addEventListener('mousemove', (e) => {
+    if (isDragging) {
+        $viewerPane.scrollLeft = scL - (e.clientX - dragSX);
+        $viewerPane.scrollTop  = scT - (e.clientY - dragSY);
+        return;
+    }
+    if (isMousePan) {
+        panX = mousePanBX + (e.clientX - mousePanSX);
+        panY = mousePanBY + (e.clientY - mousePanSY);
+        applyScaledTransform();
+    }
+});
+document.addEventListener('mouseup', () => {
+    isDragging = false; isMousePan = false;
+    $img.classList.remove('dragging');
+});
 
-    /* ═══════════════════════════════════════════════════════
-     * Workflow status display
-     * ═══════════════════════════════════════════════════════ */
-    function updateWorkflowStatus(status) {
-        if (!status) return;
-        const running = status.running;
-        wfStatus.className = 'wf-status ' + (running ? 'running' : 'idle');
+/* ── MOUSE WHEEL ZOOM (PC — zoom towards cursor) ── */
+$viewerPane.addEventListener('wheel', (e) => {
+    if ($img.classList.contains('fit-actual')) return;
+    if ($img.style.display === 'none') return;
+    e.preventDefault();
+    const oldScale = currentScale;
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    currentScale = Math.min(MAX_SCALE, Math.max(1, currentScale * factor));
+    if (currentScale <= 1.001) { currentScale = 1; panX = 0; panY = 0; }
+    else {
+        const rect = $viewerPane.getBoundingClientRect();
+        const dx = e.clientX - rect.left - rect.width / 2;
+        const dy = e.clientY - rect.top - rect.height / 2;
+        const ratio = currentScale / oldScale;
+        panX = dx * (1 - ratio) + panX * ratio;
+        panY = dy * (1 - ratio) + panY * ratio;
+    }
+    applyScaledTransform();
+}, { passive: false });
 
-        if (running) {
-            const nodeClass = status.current_node_class || '';
-            const nodeId    = status.current_node_id || '';
-            wfLabel.textContent = 'Running';
-            if (nodeClass && nodeId !== '__starting__') {
-                wfNode.textContent = `· #${nodeId} ${nodeClass}`;
-            } else if (nodeId === '__starting__') {
-                wfNode.textContent = '· Starting…';
-            } else {
-                wfNode.textContent = nodeId ? `· Node #${nodeId}` : '';
-            }
-        } else {
-            wfLabel.textContent = 'Idle';
-            wfNode.textContent = '';
-        }
+/* ── DOUBLE-CLICK RESET ZOOM (PC) ── */
+$img.addEventListener('dblclick', (e) => {
+    if ($img.classList.contains('fit-actual')) return;
+    currentScale = 1; panX = 0; panY = 0;
+    $img.style.transform = '';
+    $img.style.transformOrigin = '';
+    $img.classList.remove('pannable');
+});
 
-        // Check if our pending rerun has been confirmed by the server
-        rerunCheckConfirmation(status);
+let isTouchDrag = false;
+let isTouchPan = false;
+let panStartX = 0;
+let panStartY = 0;
+let panBaseX = 0;
+let panBaseY = 0;
+$img.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
 
-        // Check if our pending interrupt has been confirmed by the server
-        interruptCheckConfirmation(status);
-
-        // Enable/disable interrupt button based on running state
-        if (!_interruptLocked) {
-            interruptBtn.disabled = !running;
-        }
+    if ($img.classList.contains('fit-actual')) {
+        isTouchDrag = true;
+        isTouchPan = false;
+        $img.classList.add('dragging');
+        dragSX = e.touches[0].clientX;
+        dragSY = e.touches[0].clientY;
+        scL = $viewerPane.scrollLeft;
+        scT = $viewerPane.scrollTop;
+        e.preventDefault();
+        return;
     }
 
-    /* ═══════════════════════════════════════════════════════
-     * Rerun split-button — fully server-driven
-     *
-     * Design principles:
-     *   1. Every rerun command goes through the server-side
-     *      POST /simple_utility/global_image_preview/rerun
-     *      endpoint.  This works identically from LAN or WAN,
-     *      regardless of whether the ComfyUI tab is open.
-     *
-     *   2. Each viewer tab has a unique TAB_ID (UUID).  The
-     *      rerun request sends this as ``rerun_id``.  The
-     *      server echoes back the last successfully queued
-     *      ``rerun_id`` in the status response so the tab
-     *      can confirm its own command was processed.
-     *
-     *   3. The server clears the pending queue before adding
-     *      the new rerun item, so rapid clicks or retries
-     *      NEVER stack extra jobs.
-     *
-     *   4. "Same Task" re-queues the exact same prompt with
-     *      all values unchanged (seeds, primitives, etc.).
-     *      "New Task" applies each widget's
-     *      control_after_generate rule (randomize/increment/
-     *      decrement/fixed) server-side.
-     *
-     *   5. The button stays locked until the server confirms
-     *      the rerun_id matches, OR a timeout expires.
-     * ═══════════════════════════════════════════════════════ */
-    const rerunMode   = document.getElementById('rerunMode');
+    if (currentScale > 1) {
+        isTouchPan = true;
+        isTouchDrag = false;
+        $img.classList.add('dragging');
+        panStartX = e.touches[0].clientX;
+        panStartY = e.touches[0].clientY;
+        panBaseX = panX;
+        panBaseY = panY;
+        e.preventDefault();
+    }
+}, { passive: false });
+document.addEventListener('touchmove', (e) => {
+    if (isTouchDrag && e.touches.length === 1) {
+        $viewerPane.scrollLeft = scL - (e.touches[0].clientX - dragSX);
+        $viewerPane.scrollTop  = scT - (e.touches[0].clientY - dragSY);
+        e.preventDefault();
+        return;
+    }
 
-    // Unique per-tab identifier — survives page reloads within the same tab.
-    // NOTE: crypto.randomUUID() requires a Secure Context (HTTPS or localhost).
-    // On plain HTTP from a LAN IP (e.g. 192.168.x.x) it throws a TypeError,
-    // which would kill the entire script.  Fall back to a manual UUID.
-    function _generateUUID() {
+    if (isTouchPan && e.touches.length === 1) {
+        panX = panBaseX + (e.touches[0].clientX - panStartX);
+        panY = panBaseY + (e.touches[0].clientY - panStartY);
+        applyScaledTransform();
+        e.preventDefault();
+    }
+}, { passive: false });
+document.addEventListener('touchend', () => {
+    isTouchDrag = false;
+    isTouchPan = false;
+    $img.classList.remove('dragging');
+});
+
+/* ── PINCH-TO-ZOOM + double-tap ── */
+let lastPinchDist = 0;
+
+function pinchDist(t) {
+    const dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+$img.addEventListener('touchstart', (e) => {
+    if ($img.classList.contains('fit-actual')) return;
+    if (e.touches.length === 2) {
+        isTouchPan = false;
+        isTouchDrag = false;
+        lastPinchDist = pinchDist(e.touches);
+        e.preventDefault();
+    }
+}, { passive: false });
+$img.addEventListener('touchmove', (e) => {
+    if ($img.classList.contains('fit-actual') || e.touches.length !== 2) return;
+    const d = pinchDist(e.touches);
+    if (lastPinchDist > 0) {
+        currentScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, currentScale * (d / lastPinchDist)));
+        if (currentScale <= 1) {
+            currentScale = 1;
+            panX = 0;
+            panY = 0;
+        }
+        applyScaledTransform();
+    }
+    lastPinchDist = d; e.preventDefault();
+}, { passive: false });
+$img.addEventListener('touchend', (e) => { if (e.touches.length < 2) lastPinchDist = 0; });
+
+let lastTapTime = 0;
+$img.addEventListener('touchend', (e) => {
+    if (e.touches.length > 0) return;
+    const now = Date.now();
+    if (now - lastTapTime < 300) {
+        currentScale = 1;
+        panX = 0;
+        panY = 0;
+        $img.style.transform = '';
+        $img.style.transformOrigin = '';
+        $img.classList.remove('pannable');
+        e.preventDefault();
+    }
+    lastTapTime = now;
+});
+
+/* ── WORKFLOW STATUS ── */
+function updateWorkflowStatus(status) {
+    if (!status) return;
+    const running = status.running;
+    $wfStatus.className = 'hdr-status ' + (running ? 'running' : 'idle');
+    if (running) {
+        const nc = status.current_node_class || '';
+        const ni = status.current_node_id || '';
+        $wfLabel.textContent = 'Running';
+        if (nc && ni !== '__starting__')       $wfNode.textContent = `· #${ni} ${nc}`;
+        else if (ni === '__starting__')        $wfNode.textContent = '· Starting…';
+        else                                   $wfNode.textContent = ni ? `· Node #${ni}` : '';
+    } else {
+        $wfLabel.textContent = 'Idle';
+        $wfNode.textContent  = '';
+    }
+    rerunCheckConfirmation(status);
+    interruptCheckConfirmation(status);
+    if (!_intLocked) $interruptBtn.disabled = !running;
+}
+
+/* ── RERUN ── */
+function _uuid() {
+    try { return crypto.randomUUID(); }
+    catch(_) {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+            const r = (Math.random() * 16) | 0;
+            return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+        });
+    }
+}
+const TAB_ID = _uuid();
+const LABELS = { same: '⟳ Rerun (Same Task)', new: '⟳ Rerun (New Task)' };
+function getMode() { return $rerunMode.value || 'same'; }
+
+let _rerunLocked = false, _pendingRerunId = null, _rerunTimer = null;
+const RERUN_TIMEOUT = 15000;
+
+$rerunMode.addEventListener('change', () => {
+    if (!_rerunLocked) $rerunBtn.textContent = LABELS[getMode()] || LABELS.same;
+});
+
+function rerunCheckConfirmation(s) {
+    if (!_rerunLocked || !_pendingRerunId) return;
+    if (s && s.last_rerun_id === _pendingRerunId) rerunUnlock();
+}
+function rerunUnlock() {
+    clearTimeout(_rerunTimer); _rerunTimer = null;
+    _rerunLocked = false; _pendingRerunId = null;
+    $rerunBtn.disabled = false;
+    $rerunBtn.textContent = LABELS[getMode()] || LABELS.same;
+}
+
+$rerunBtn.addEventListener('click', async () => {
+    if (_rerunLocked) return;
+    _rerunLocked = true; $rerunBtn.disabled = true;
+    $rerunBtn.textContent = '⟳ Sending…';
+    const rid = TAB_ID + ':' + Date.now();
+    _pendingRerunId = rid;
+    _rerunTimer = setTimeout(() => { console.warn('Rerun timeout'); rerunUnlock(); }, RERUN_TIMEOUT);
+    try {
+        const r = await fetch('/simple_utility/global_image_preview/rerun', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: getMode(), rerun_id: rid }), cache: 'no-store',
+        });
+        if (!r.ok) { console.warn('Rerun failed'); rerunUnlock(); return; }
+        $rerunBtn.textContent = '⟳ Waiting…';
+    } catch(e) { console.warn('Rerun error:', e); rerunUnlock(); }
+});
+
+/* ── INTERRUPT ── */
+let _intLocked = false, _pendingIntId = null, _intTimer = null;
+const INT_TIMEOUT = 10000;
+
+function interruptCheckConfirmation(s) {
+    if (!_intLocked || !_pendingIntId) return;
+    if (s && s.last_interrupt_id === _pendingIntId) intUnlock();
+}
+function intUnlock() {
+    clearTimeout(_intTimer); _intTimer = null;
+    _intLocked = false; _pendingIntId = null;
+    $interruptBtn.textContent = '✕ Interrupt';
+    $interruptBtn.disabled = true;
+}
+
+$interruptBtn.addEventListener('click', async () => {
+    if (_intLocked) return;
+    _intLocked = true; $interruptBtn.disabled = true;
+    $interruptBtn.textContent = '✕ Interrupting…';
+    const iid = TAB_ID + ':int:' + Date.now();
+    _pendingIntId = iid;
+    _intTimer = setTimeout(() => { console.warn('Interrupt timeout'); intUnlock(); }, INT_TIMEOUT);
+    try {
+        const r = await fetch('/simple_utility/global_image_preview/interrupt', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ interrupt_id: iid }), cache: 'no-store',
+        });
+        if (!r.ok) { console.warn('Interrupt failed'); intUnlock(); }
+    } catch(e) { console.warn('Interrupt error:', e); intUnlock(); }
+});
+
+/* ── POLLING (300ms) ── */
+const FO = { cache: 'no-store' };
+
+async function pollLoop() {
+    while (isPolling) {
         try {
-            return crypto.randomUUID();
-        } catch(e) {
-            // Fallback for insecure contexts (plain HTTP on LAN IPs)
-            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-                const r = (Math.random() * 16) | 0;
-                return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-            });
-        }
-    }
-    const TAB_ID = _generateUUID();
+            const sinceParam = lastImagesCounter > 0 ? `?since=${lastImagesCounter}` : '';
+            const resp = await fetch('/simple_utility/global_image_preview/latest' + sinceParam, FO);
+            if (resp.ok) {
+                $connDot.classList.remove('disconnected');
+                const d = await resp.json();
+                const ic = d.images_counter ?? -1;
 
-    // Button labels
-    const LABELS = { same: '⟳ Rerun (Same Task)', new: '⟳ Rerun (New Task)' };
-    function getMode() { return rerunMode.value || 'same'; }
-
-    // ── Rerun state ──
-    let _rerunLocked      = false;   // true while a rerun is in-flight
-    let _pendingRerunId   = null;    // the rerun_id we are waiting for
-    let _rerunTimeoutTimer = null;   // safety timeout to unlock the button
-    const RERUN_TIMEOUT_MS = 15000;  // max wait before force-unlock
-
-    // Sync button label with dropdown
-    rerunMode.addEventListener('change', () => {
-        if (!_rerunLocked) rerunBtn.textContent = LABELS[getMode()] || LABELS.same;
-    });
-
-    /**
-     * Called every poll cycle (from updateWorkflowStatus).
-     * Checks if the server's last_rerun_id matches the one we sent.
-     */
-    function rerunCheckConfirmation(status) {
-        if (!_rerunLocked || !_pendingRerunId) return;
-        if (status && status.last_rerun_id === _pendingRerunId) {
-            rerunUnlock();
-        }
-    }
-
-    /** Unlock the button and reset all rerun state. */
-    function rerunUnlock() {
-        clearTimeout(_rerunTimeoutTimer);
-        _rerunTimeoutTimer = null;
-        _rerunLocked    = false;
-        _pendingRerunId = null;
-        rerunBtn.disabled = false;
-        rerunBtn.textContent = LABELS[getMode()] || LABELS.same;
-    }
-
-    /** Main click handler. */
-    rerunBtn.addEventListener('click', async () => {
-        if (_rerunLocked) return;
-
-        // Lock immediately
-        _rerunLocked  = true;
-        rerunBtn.disabled = true;
-        rerunBtn.textContent = '⟳ Sending…';
-
-        // Generate a unique ID for THIS specific rerun request
-        const rerunId = TAB_ID + ':' + Date.now();
-        _pendingRerunId = rerunId;
-
-        // Safety timeout — always unlock after RERUN_TIMEOUT_MS
-        _rerunTimeoutTimer = setTimeout(() => {
-            console.warn('Rerun: timed out waiting for server confirmation');
-            rerunUnlock();
-        }, RERUN_TIMEOUT_MS);
-
-        // Send the rerun command to the server
-        try {
-            const resp = await fetch('/simple_utility/global_image_preview/rerun', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    mode: getMode(),
-                    rerun_id: rerunId,
-                }),
-                cache: 'no-store',
-            });
-
-            if (!resp.ok) {
-                const data = await resp.json().catch(() => ({}));
-                console.warn('Rerun failed:', data.error || resp.statusText);
-                rerunUnlock();
-                return;
-            }
-
-            // Server accepted — now wait for poll loop to confirm
-            rerunBtn.textContent = '⟳ Waiting…';
-        } catch (e) {
-            console.warn('Rerun request error:', e);
-            rerunUnlock();
-        }
-    });
-
-    /* ═══════════════════════════════════════════════════════
-     * Interrupt button
-     *
-     * Sends POST /simple_utility/global_image_preview/interrupt
-     * with a unique interrupt_id.  The button stays locked
-     * until the server echoes back the same interrupt_id in
-     * the status response (confirming the interrupt was
-     * processed), OR a safety timeout expires.
-     * ═══════════════════════════════════════════════════════ */
-    let _interruptLocked       = false;
-    let _pendingInterruptId    = null;
-    let _interruptTimeoutTimer = null;
-    const INTERRUPT_TIMEOUT_MS = 10000;
-
-    function interruptCheckConfirmation(status) {
-        if (!_interruptLocked || !_pendingInterruptId) return;
-        if (status && status.last_interrupt_id === _pendingInterruptId) {
-            interruptUnlock();
-        }
-    }
-
-    function interruptUnlock() {
-        clearTimeout(_interruptTimeoutTimer);
-        _interruptTimeoutTimer = null;
-        _interruptLocked    = false;
-        _pendingInterruptId = null;
-        interruptBtn.textContent = '✕ Interrupt';
-        // Will be re-enabled/disabled by next status poll based on running state
-        interruptBtn.disabled = true;
-    }
-
-    interruptBtn.addEventListener('click', async () => {
-        if (_interruptLocked) return;
-
-        _interruptLocked = true;
-        interruptBtn.disabled = true;
-        interruptBtn.textContent = '✕ Interrupting…';
-
-        const interruptId = TAB_ID + ':int:' + Date.now();
-        _pendingInterruptId = interruptId;
-
-        _interruptTimeoutTimer = setTimeout(() => {
-            console.warn('Interrupt: timed out waiting for server confirmation');
-            interruptUnlock();
-        }, INTERRUPT_TIMEOUT_MS);
-
-        try {
-            const resp = await fetch('/simple_utility/global_image_preview/interrupt', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ interrupt_id: interruptId }),
-                cache: 'no-store',
-            });
-            if (!resp.ok) {
-                console.warn('Interrupt failed:', resp.statusText);
-                interruptUnlock();
-            }
-            // Wait for poll loop to confirm via last_interrupt_id
-        } catch (e) {
-            console.warn('Interrupt request error:', e);
-            interruptUnlock();
-        }
-    });
-
-    /* ═══════════════════════════════════════════════════════
-     * HTTP polling — always bypass browser cache
-     *
-     * Without {cache:'no-store'}, browsers may apply heuristic
-     * caching on non-loopback origins (LAN IPs), causing stale
-     * responses while 127.0.0.1 works fine.
-     * ═══════════════════════════════════════════════════════ */
-    const FETCH_OPTS = { cache: 'no-store' };
-
-    async function pollLoop() {
-        while (isPolling) {
-            try {
-                // Fetch image + preview counters
-                const resp = await fetch('/simple_utility/global_image_preview/latest', FETCH_OPTS);
-                if (resp.ok) {
-                    connDot.classList.remove('disconnected');
-                    const data = await resp.json();
-
-                    const imagesCounter = data.images_counter ?? -1;
-                    if (imagesCounter !== lastImagesCounter && imagesCounter > 0) {
-                        lastImagesCounter = imagesCounter;
-                        const images = data.images || [];
-                        if (images.length > 0) {
-                            showExecutedImage(images[images.length - 1]);
+                /* Process ALL new image batches so history never misses
+                   images from any node (Save Image, Preview Image, etc.) */
+                const batches = d.new_batches;
+                if (Array.isArray(batches) && batches.length > 0) {
+                    for (const batch of batches) {
+                        const imgs = batch.images || [];
+                        for (const img of imgs) addToHistory(img, fullUrl(img), true);
+                    }
+                    renderHistory(); /* single DOM update for all new items */
+                    /* Show the very last image as the main preview */
+                    const lastBatch = batches[batches.length - 1];
+                    const lastImgs = lastBatch.images || [];
+                    if (lastImgs.length > 0) {
+                        const info = lastImgs[lastImgs.length - 1];
+                        const key = `${info.type}/${info.subfolder || ''}/${info.filename}`;
+                        if (key !== lastKey) {
+                            lastKey = key;
+                            showImageFromUrl(fullUrl(info), `${info.filename}  (${info.type})`);
                         }
                     }
-
-                    const previewCounter = data.preview_counter ?? -1;
-                    if (previewCounter !== lastPreviewCounter && previewCounter > 0) {
-                        lastPreviewCounter = previewCounter;
-                        if (data.has_preview_blob) {
-                            try {
-                                const previewResp = await fetch(
-                                    '/simple_utility/global_image_preview/latest_preview',
-                                    FETCH_OPTS
-                                );
-                                if (previewResp.ok) {
-                                    const blob = await previewResp.blob();
-                                    showPreviewBlob(blob);
-                                }
-                            } catch(e) { /* ignore */ }
-                        }
-                    }
-                } else {
-                    connDot.classList.add('disconnected');
+                    lastImagesCounter = ic;
+                } else if (ic !== lastImagesCounter && ic > 0) {
+                    /* Fallback for first load or when new_batches is absent */
+                    lastImagesCounter = ic;
+                    const imgs = d.images || [];
+                    if (imgs.length > 0) showExecutedImage(imgs[imgs.length - 1]);
                 }
-
-                // Fetch workflow status
-                try {
-                    const sr = await fetch('/simple_utility/global_image_preview/status', FETCH_OPTS);
-                    if (sr.ok) updateWorkflowStatus(await sr.json());
-                } catch(e) {}
-            } catch(e) {
-                connDot.classList.add('disconnected');
-            }
-
-            await new Promise(r => setTimeout(r, 300));
-        }
+                const pc = d.preview_counter ?? -1;
+                if (pc !== lastPreviewCounter && pc > 0) {
+                    lastPreviewCounter = pc;
+                    if (d.has_preview_blob) {
+                        try {
+                            const pr = await fetch('/simple_utility/global_image_preview/latest_preview', FO);
+                            if (pr.ok) showPreviewBlob(await pr.blob());
+                        } catch(_) {}
+                    }
+                }
+            } else { $connDot.classList.add('disconnected'); }
+            try {
+                const sr = await fetch('/simple_utility/global_image_preview/status', FO);
+                if (sr.ok) updateWorkflowStatus(await sr.json());
+            } catch(_) {}
+        } catch(_) { $connDot.classList.add('disconnected'); }
+        await new Promise(r => setTimeout(r, 300));
     }
+}
 
-    /* ── Init ── */
-    connDot.classList.add('disconnected');   // start as red until first successful poll
-    pollLoop();
+/* ── INIT ── */
+pollLoop();
 })();
 </script>
 </body>
 </html>
+
