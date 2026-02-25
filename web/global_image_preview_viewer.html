@@ -584,24 +584,9 @@ let isPolling = true;
 
 const HISTORY_CLEAR_COUNTER_KEY = 'simpleutility.globalpreview.historyClearCounter';
 
-function readHistoryClearCounter() {
-    try {
-        const raw = localStorage.getItem(HISTORY_CLEAR_COUNTER_KEY);
-        if (raw === null) return -1;
-        const parsed = Number.parseInt(raw, 10);
-        return Number.isFinite(parsed) ? parsed : -1;
-    } catch (_) {
-        return -1;
-    }
-}
-
-function writeHistoryClearCounter(counter) {
-    try {
-        localStorage.setItem(HISTORY_CLEAR_COUNTER_KEY, String(counter));
-    } catch (_) {}
-}
-
-lastImagesCounter = Math.max(lastImagesCounter, readHistoryClearCounter());
+/* Legacy localStorage value is no longer used — history is now stored
+   server-side for the entire ComfyUI session.  Clean it up silently. */
+try { localStorage.removeItem(HISTORY_CLEAR_COUNTER_KEY); } catch (_) {}
 
 /* ── HELPERS ── */
 function viewUrl(info) {
@@ -716,10 +701,18 @@ $historyBtn.addEventListener('click', () => {
     $historyBtn.classList.toggle('active');
 });
 
-$historyClear.addEventListener('click', () => {
+$historyClear.addEventListener('click', async () => {
     historyItems = [];
     renderHistory();
-    writeHistoryClearCounter(lastImagesCounter);
+    try {
+        const r = await fetch('/simple_utility/global_image_preview/clear_history', {
+            method: 'POST', cache: 'no-store',
+        });
+        if (r.ok) {
+            const d = await r.json();
+            lastImagesCounter = d.images_counter ?? lastImagesCounter;
+        }
+    } catch (_) {}
 });
 
 /* ── LIGHTBOX ── */
@@ -1031,7 +1024,7 @@ const FO = { cache: 'no-store' };
 async function pollLoop() {
     while (isPolling) {
         try {
-            const sinceParam = lastImagesCounter > 0 ? `?since=${lastImagesCounter}` : '';
+            const sinceParam = `?since=${Math.max(0, lastImagesCounter)}`;
             const resp = await fetch('/simple_utility/global_image_preview/latest' + sinceParam, FO);
             if (resp.ok) {
                 $connDot.classList.remove('disconnected');

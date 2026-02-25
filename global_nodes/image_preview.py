@@ -38,7 +38,7 @@ _latest_images_counter: int = 0  # bumped each time new executed images arrive
 # Rolling history buffer — keeps the last N image batches so that the
 # standalone viewer never misses images between its 300 ms poll cycles.
 _image_history: List[tuple] = []  # [(counter, images_list), ...]
-_IMAGE_HISTORY_MAX = 200
+_IMAGE_HISTORY_MAX = 500
 
 _latest_preview_blob: bytes | None = None
 _latest_preview_lock = threading.Lock()
@@ -69,6 +69,16 @@ def get_images_since(since_counter: int) -> tuple[list, int]:
     with _latest_images_lock:
         result = [(c, imgs) for c, imgs in _image_history if c > since_counter]
         return result, _latest_images_counter
+
+
+def clear_image_history() -> int:
+    """Clear the in-memory image history buffer.
+
+    Returns the current counter value (so the viewer can fast-forward).
+    """
+    with _latest_images_lock:
+        _image_history.clear()
+        return _latest_images_counter
 
 
 def _set_latest_preview_blob(blob: bytes) -> None:
@@ -625,13 +635,25 @@ def _register_routes() -> None:
                 since = int(since_raw)
             except (ValueError, TypeError):
                 since = 0
-            if since > 0:
-                entries, _ = get_images_since(since)
-                payload["new_batches"] = [
-                    {"counter": c, "images": imgs}
-                    for c, imgs in entries
-                ]
+            entries, _ = get_images_since(max(0, since))
+            payload["new_batches"] = [
+                {"counter": c, "images": imgs}
+                for c, imgs in entries
+            ]
         return web.json_response(payload, headers=_NO_CACHE_HDRS)
+
+    @routes.post("/simple_utility/global_image_preview/clear_history")
+    async def _api_clear_history(request):
+        """Clear the server-side image history buffer.
+
+        Returns the current images_counter so the viewer can update its
+        baseline without re-fetching cleared data.
+        """
+        counter = clear_image_history()
+        return web.json_response(
+            {"status": "cleared", "images_counter": counter},
+            headers=_NO_CACHE_HDRS,
+        )
 
     @routes.get("/simple_utility/global_image_preview/latest_preview")
     async def _api_latest_preview(request):
