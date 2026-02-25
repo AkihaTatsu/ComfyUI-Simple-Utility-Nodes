@@ -588,6 +588,30 @@ const HISTORY_CLEAR_COUNTER_KEY = 'simpleutility.globalpreview.historyClearCount
    server-side for the entire ComfyUI session.  Clean it up silently. */
 try { localStorage.removeItem(HISTORY_CLEAR_COUNTER_KEY); } catch (_) {}
 
+/* ── SETTINGS PERSISTENCE ── */
+const PREF_PREFIX = 'simpleutility.globalpreview.';
+function loadPref(key, fallback) {
+    try { const v = localStorage.getItem(PREF_PREFIX + key); return v !== null ? v : fallback; }
+    catch (_) { return fallback; }
+}
+function savePref(key, value) {
+    try { localStorage.setItem(PREF_PREFIX + key, String(value)); } catch (_) {}
+}
+
+/* Restore persisted control values before first render */
+(function restorePrefs() {
+    const fit = loadPref('fitMode', 'contain');
+    if ([...  $fitMode.options].some(o => o.value === fit)) $fitMode.value = fit;
+
+    const mode = loadPref('rerunMode', 'same');
+    if ([...$rerunMode.options].some(o => o.value === mode)) $rerunMode.value = mode;
+
+    if (loadPref('historyOpen', 'false') === 'true') {
+        $historyPanel.classList.add('open');
+        $historyBtn.classList.add('active');
+    }
+})();
+
 /* ── HELPERS ── */
 function viewUrl(info) {
     return `/view?filename=${encodeURIComponent(info.filename)}`
@@ -667,7 +691,10 @@ function applyFit() {
     else                        $img.classList.add('fit-contain');
 }
 
-$fitMode.addEventListener('change', applyFit);
+$fitMode.addEventListener('change', () => {
+    savePref('fitMode', $fitMode.value);
+    applyFit();
+});
 
 /* ── HISTORY ── */
 function addToHistory(info, cachedUrl, skipRender) {
@@ -699,6 +726,7 @@ function renderHistory() {
 $historyBtn.addEventListener('click', () => {
     $historyPanel.classList.toggle('open');
     $historyBtn.classList.toggle('active');
+    savePref('historyOpen', $historyPanel.classList.contains('open'));
 });
 
 $historyClear.addEventListener('click', async () => {
@@ -952,10 +980,14 @@ const TAB_ID = _uuid();
 const LABELS = { same: '⟳ Rerun (Same Task)', new: '⟳ Rerun (New Task)' };
 function getMode() { return $rerunMode.value || 'same'; }
 
+/* Sync button label to the restored dropdown value */
+$rerunBtn.textContent = LABELS[getMode()] || LABELS.same;
+
 let _rerunLocked = false, _pendingRerunId = null, _rerunTimer = null;
 const RERUN_TIMEOUT = 15000;
 
 $rerunMode.addEventListener('change', () => {
+    savePref('rerunMode', $rerunMode.value);
     if (!_rerunLocked) $rerunBtn.textContent = LABELS[getMode()] || LABELS.same;
 });
 
@@ -1034,26 +1066,30 @@ async function pollLoop() {
                 /* Process ALL new image batches so history never misses
                    images from any node (Save Image, Preview Image, etc.) */
                 const batches = d.new_batches;
-                if (Array.isArray(batches) && batches.length > 0) {
-                    for (const batch of batches) {
-                        const imgs = batch.images || [];
-                        for (const img of imgs) addToHistory(img, fullUrl(img), true);
-                    }
-                    renderHistory(); /* single DOM update for all new items */
-                    /* Show the very last image as the main preview */
-                    const lastBatch = batches[batches.length - 1];
-                    const lastImgs = lastBatch.images || [];
-                    if (lastImgs.length > 0) {
-                        const info = lastImgs[lastImgs.length - 1];
-                        const key = `${info.type}/${info.subfolder || ''}/${info.filename}`;
-                        if (key !== lastKey) {
-                            lastKey = key;
-                            showImageFromUrl(fullUrl(info), `${info.filename}  (${info.type})`);
+                if (Array.isArray(batches)) {
+                    /* new_batches is present — it is the authoritative source.
+                       If empty (e.g. after clear), just sync the counter. */
+                    if (batches.length > 0) {
+                        for (const batch of batches) {
+                            const imgs = batch.images || [];
+                            for (const img of imgs) addToHistory(img, fullUrl(img), true);
+                        }
+                        renderHistory(); /* single DOM update for all new items */
+                        /* Show the very last image as the main preview */
+                        const lastBatch = batches[batches.length - 1];
+                        const lastImgs = lastBatch.images || [];
+                        if (lastImgs.length > 0) {
+                            const info = lastImgs[lastImgs.length - 1];
+                            const key = `${info.type}/${info.subfolder || ''}/${info.filename}`;
+                            if (key !== lastKey) {
+                                lastKey = key;
+                                showImageFromUrl(fullUrl(info), `${info.filename}  (${info.type})`);
+                            }
                         }
                     }
                     lastImagesCounter = ic;
                 } else if (ic !== lastImagesCounter && ic > 0) {
-                    /* Fallback for first load or when new_batches is absent */
+                    /* Fallback: new_batches absent (old server). */
                     lastImagesCounter = ic;
                     const imgs = d.images || [];
                     if (imgs.length > 0) showExecutedImage(imgs[imgs.length - 1]);
