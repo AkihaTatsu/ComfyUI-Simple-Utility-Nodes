@@ -7,6 +7,9 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Simple Global Image Preview — Live Viewer</title>
+    <link rel="icon" type="image/x-icon" href="/simple_utility/global_image_preview/favicon.ico">
+    <link rel="shortcut icon" type="image/x-icon" href="/simple_utility/global_image_preview/favicon.ico">
+    <link rel="apple-touch-icon" href="/simple_utility/global_image_preview/favicon.ico">
     <style>
 /* ================================================================
    CSS RESET & VARIABLES
@@ -147,6 +150,10 @@ select { font-family: inherit; }
     cursor: pointer;
     font-size: 12px;
     white-space: nowrap;
+    -webkit-appearance: none;
+    appearance: none;
+    outline: none;
+    line-height: 1.4;
 }
 .hdr-controls button:hover { background: var(--bg-hover); }
 .hdr-controls button.active { background: var(--green); color: #111; }
@@ -165,6 +172,12 @@ select { font-family: inherit; }
 }
 #interruptBtn:hover { background: #c0392b; }
 #interruptBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+#browserBtn {
+    background: #8e44ad; color: #fff;
+    border-color: #8e44ad; font-weight: 600;
+}
+#browserBtn:hover { background: #7d3c98; }
 
 .rerun-group {
     display: flex;
@@ -497,6 +510,7 @@ select { font-family: inherit; }
                 <option value="actual">Actual Size</option>
             </select>
         </label>
+        <button id="browserBtn" style="display:none" title="Open ComfyUI-Browser">Open Output Browser</button>
         <button id="historyBtn" title="Toggle history panel">History</button>
     </div>
 </header>
@@ -572,6 +586,7 @@ const $lightbox      = document.getElementById('lightbox');
 const $lightboxImg   = document.getElementById('lightboxImg');
 const $lightboxClose = document.getElementById('lightboxClose');
 const $lightboxInfo  = document.getElementById('lightboxInfo');
+const $browserBtn    = document.getElementById('browserBtn');
 
 /* ── STATE ── */
 let lastKey = null;
@@ -751,6 +766,8 @@ function openLightbox(item) {
     $lightboxImg.src = item.cachedUrl;
     $lightboxInfo.textContent = `${item.info.filename}  (${item.info.type})`;
     $lightbox.classList.add('open');
+    /* Push a history entry so the mobile back button / gesture closes the lightbox */
+    try { history.pushState({ lightbox: true }, ''); } catch (_) {}
 }
 
 function closeLightbox() {
@@ -766,6 +783,13 @@ $lightboxImg.addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $lightbox.classList.contains('open')) closeLightbox();
+});
+
+/* Back button / gesture closes lightbox on mobile & tablet */
+window.addEventListener('popstate', (e) => {
+    if ($lightbox.classList.contains('open')) {
+        closeLightbox();
+    }
 });
 
 /* ── MOBILE MENU ── */
@@ -1116,6 +1140,19 @@ async function pollLoop() {
 
 /* ── INIT ── */
 pollLoop();
+
+/* ── COMFYUI-BROWSER DETECTION ── */
+(async function detectBrowser() {
+    try {
+        const r = await fetch('/browser/web/index.html', { method: 'HEAD', cache: 'no-store' });
+        if (r.ok) {
+            $browserBtn.style.display = '';
+            $browserBtn.addEventListener('click', () => {
+                window.open('/browser/web/index.html', '_blank');
+            });
+        }
+    } catch (_) { /* ComfyUI-Browser not installed — button stays hidden */ }
+})();
 })();
 </script>
 </body>

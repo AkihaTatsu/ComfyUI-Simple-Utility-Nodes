@@ -901,6 +901,20 @@ def _register_routes() -> None:
             "interrupt_id": interrupt_id,
         })
 
+    @routes.get("/simple_utility/global_image_preview/favicon.ico")
+    async def _api_favicon(request):
+        """Serve the favicon for the standalone viewer page."""
+        ico_path = os.path.join(
+            os.path.dirname(__file__), "..", "web", "assets", "favicon.ico"
+        )
+        ico_path = os.path.normpath(ico_path)
+        if os.path.isfile(ico_path):
+            return web.FileResponse(ico_path, headers={
+                "Content-Type": "image/x-icon",
+                "Cache-Control": "public, max-age=86400",
+            })
+        return web.Response(status=404)
+
     @routes.get("/simple_utility/global_image_preview/viewer")
     async def _viewer_page(request):
         """Serve the fullscreen auto-updating viewer HTML page.
