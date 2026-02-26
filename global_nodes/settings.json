@@ -5,5 +5,11 @@
     "SimpleGlobalVariableOutput": {
         "default_variable_name": "my_variable"
     },
-    "SimpleGlobalImagePreview": {}
+    "SimpleGlobalImagePreview": {},
+    "SimpleGlobalVRAMCacheSaving": {
+        "default_cache_name": "VRAM_cache"
+    },
+    "SimpleGlobalVRAMCacheLoading": {
+        "default_cache_name": "VRAM_cache"
+    }
 }

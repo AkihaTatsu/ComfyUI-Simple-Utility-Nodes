@@ -5,9 +5,12 @@ import { installPassthroughTypeResolver } from "./type_resolver.js";
 app.registerExtension({
     name: "SimpleUtility.GlobalNodes",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        // Apply pale_blue color to both global variable nodes
+        // Apply pale_blue color to global variable and VRAM cache nodes
         if (nodeData.name === "SimpleGlobalVariableInput" || 
-            nodeData.name === "SimpleGlobalVariableOutput") {
+            nodeData.name === "SimpleGlobalVariableOutput" ||
+            nodeData.name === "SimpleGlobalVRAMCacheSaving" ||
+            nodeData.name === "SimpleGlobalVRAMCacheLoading" ||
+            nodeData.name === "SimpleVRAMCacheRAMClearing") {
             
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
@@ -28,6 +31,14 @@ app.registerExtension({
         // Input slot 1 = 'anything' (optional passthrough), Output slot 0 = 'passthrough'
         if (nodeData.name === "SimpleGlobalVariableInput") {
             installPassthroughTypeResolver(nodeType, 1, 0);
+        }
+
+        // Auto-type-resolving for VRAM Cache nodes
+        // Input slot 0 = 'anything' (optional passthrough), Output slot 0 = 'passthrough'
+        if (nodeData.name === "SimpleGlobalVRAMCacheSaving" ||
+            nodeData.name === "SimpleGlobalVRAMCacheLoading" ||
+            nodeData.name === "SimpleVRAMCacheRAMClearing") {
+            installPassthroughTypeResolver(nodeType, 0, 0);
         }
 
         // ── SimpleGlobalImagePreview ──────────────────────────────

@@ -162,5 +162,34 @@
             "trigger": "OPTIONAL: Connect this to any output from a node to create an execution dependency. Useful for controlling when the preview node executes relative to other nodes."
         },
         "outputs": {}
+    },
+    "SimpleGlobalVRAMCacheSaving": {
+        "node": "Save the current VRAM cache (all loaded models) to system RAM and disk, then clear VRAM. If enough RAM is available, models are moved to CPU first and a background thread saves to disk without blocking. If RAM is tight, models are saved to disk synchronously. The saved cache is protected from garbage collection and persists until overwritten or ComfyUI restarts.",
+        "inputs": {
+            "anything": "Passthrough input. Any data type is accepted and will be passed to the passthrough output.",
+            "cache_name": "A unique name to identify this saved VRAM state. Use the same name in 'Simple Global VRAM Cache Loading' to restore it. Default is 'VRAM_cache'. Cannot be empty."
+        },
+        "outputs": {
+            "passthrough": "Passthrough of the 'anything' input data. Returns None if 'anything' is not connected."
+        }
+    },
+    "SimpleGlobalVRAMCacheLoading": {
+        "node": "Restore a previously saved VRAM cache from RAM or disk. Checks the RAM cache first (fast, full model state preserved). Falls back to disk cache if RAM entry is absent. Clears current VRAM before restoring. Raises an error if no cache with the given name exists.",
+        "inputs": {
+            "cache_name": "The name of the VRAM cache to restore. Must match a cache_name from a previously executed 'Simple Global VRAM Cache Saving' node. Default is 'VRAM_cache'. Cannot be empty.",
+            "anything": "OPTIONAL: Passthrough input. Any data type is accepted and will be passed to the passthrough output. If not connected, the output will be None."
+        },
+        "outputs": {
+            "passthrough": "Passthrough of the 'anything' input data. Returns None if 'anything' is not connected."
+        }
+    },
+    "SimpleVRAMCacheRAMClearing": {
+        "node": "Clear ALL VRAM caches currently held in system RAM. Disk caches are NOT affected and remain available for future loading. Useful to reclaim RAM after the cached models are no longer needed.",
+        "inputs": {
+            "anything": "OPTIONAL: Passthrough input. Any data type is accepted and will be passed to the passthrough output. If not connected, the output will be None."
+        },
+        "outputs": {
+            "passthrough": "Passthrough of the 'anything' input data. Returns None if 'anything' is not connected."
+        }
     }
 }

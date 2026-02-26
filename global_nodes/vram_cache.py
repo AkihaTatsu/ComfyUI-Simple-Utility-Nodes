@@ -1,0 +1,492 @@
+"""VRAM cache management nodes for ComfyUI.
+
+This module provides nodes for saving and restoring the VRAM cache (loaded
+models) to/from system RAM and disk, allowing users to temporarily free VRAM
+for other tasks and restore the model state later.
+
+Save flow:
+  1.  Collect all ModelPatcher references currently tracked by
+      ``comfy.model_management.current_loaded_models``.
+  2.  Check available system RAM.
+      • Enough RAM  → unload models from VRAM to CPU (RAM), store strong
+        references in the RAM cache, and start a **background thread** that
+        serialises the models to disk.  Downstream nodes execute immediately.
+      • Not enough RAM → serialise models to disk **synchronously**, then
+        unload VRAM.
+  3.  VRAM is cleared via ``unload_all_models`` + ``soft_empty_cache``.
+
+Load flow:
+  1.  Look up the RAM cache first (fast, full ModelPatcher objects).
+  2.  If not in RAM, wait for any in-flight background disk save to finish,
+      then try loading from disk.
+  3.  Clear current VRAM and call ``load_models_gpu`` with the restored
+      ModelPatcher list.
+
+Lifecycle guarantees:
+  • RAM and disk caches are **never** automatically evicted.  They can only be
+    overwritten by another save with the same ``cache_name``, or cleared when
+    ComfyUI is terminated / restarted.
+  • On module import (= ComfyUI startup), all previous RAM and disk caches
+    are purged so that stale data from a prior session does not linger.
+"""
+
+import atexit
+import gc
+import glob
+import logging
+import os
+import shutil
+import tempfile
+import threading
+from typing import Any, Dict, List, Optional, Tuple
+
+import torch
+
+import comfy.model_management
+from comfy.model_patcher import ModelPatcher
+
+logger = logging.getLogger("ComfyUI-Simple-Utility-Nodes")
+
+# ---------------------------------------------------------------------------
+# Cache storage
+# ---------------------------------------------------------------------------
+
+# RAM cache: cache_name → list[ModelPatcher]  (strong refs keep them alive)
+_VRAM_CACHE_RAM: Dict[str, List[ModelPatcher]] = {}
+
+# Disk cache: cache_name → absolute file path
+_VRAM_CACHE_DISK: Dict[str, str] = {}
+
+# Thread‑safety
+_CACHE_LOCK = threading.Lock()
+
+# Background disk‑save threads keyed by cache_name
+_BACKGROUND_THREADS: Dict[str, threading.Thread] = {}
+
+# Disk cache directory — every ComfyUI instance gets its own unique temp dir.
+# A common parent lives under the system temp folder so that leftover dirs
+# from crashed / killed instances can be discovered and cleaned up on restart.
+_CACHE_PARENT_DIR = os.path.join(tempfile.gettempdir(), "comfyui_vram_cache")
+
+# ---------------------------------------------------------------------------
+# Startup cleanup — remove ALL prior instances' leftover cache directories
+# ---------------------------------------------------------------------------
+
+def _cleanup_stale_disk_caches() -> None:
+    """Remove every ``comfyui_vram_cache/comfyui_vc_*`` directory from the
+    system temp folder.  Safe to call even when no leftovers exist."""
+    if not os.path.isdir(_CACHE_PARENT_DIR):
+        return
+    for entry in glob.glob(os.path.join(_CACHE_PARENT_DIR, "comfyui_vc_*")):
+        if os.path.isdir(entry):
+            try:
+                shutil.rmtree(entry)
+                logger.info("[VRAM Cache] Removed stale disk cache: %s", entry)
+            except OSError as exc:
+                logger.warning("[VRAM Cache] Could not remove %s: %s", entry, exc)
+
+
+def cleanup_all_caches() -> None:
+    """Clear every RAM and disk cache.  Called once at import time."""
+    with _CACHE_LOCK:
+        _VRAM_CACHE_RAM.clear()
+        _VRAM_CACHE_DISK.clear()
+
+    _cleanup_stale_disk_caches()
+
+
+# Executed on first import → ComfyUI startup
+cleanup_all_caches()
+
+# Now create a fresh, unique temp directory for *this* instance.
+os.makedirs(_CACHE_PARENT_DIR, exist_ok=True)
+_CACHE_DIR: str = tempfile.mkdtemp(prefix="comfyui_vc_", dir=_CACHE_PARENT_DIR)
+logger.info("[VRAM Cache] Disk cache directory for this instance: %s", _CACHE_DIR)
+
+
+def _cleanup_on_exit() -> None:
+    """Best‑effort cleanup when the process exits normally."""
+    try:
+        if os.path.isdir(_CACHE_DIR):
+            shutil.rmtree(_CACHE_DIR)
+    except OSError:
+        pass
+
+
+atexit.register(_cleanup_on_exit)
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _ensure_cache_dir() -> None:
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+
+
+def _disk_cache_path(cache_name: str) -> str:
+    safe = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in cache_name)
+    return os.path.join(_CACHE_DIR, f"{safe}.pt")
+
+
+def _save_to_disk(cache_name: str, patchers: List[ModelPatcher]) -> None:
+    """Serialise model nn.Modules + device metadata to a ``.pt`` file."""
+    try:
+        _ensure_cache_dir()
+        path = _disk_cache_path(cache_name)
+
+        save_data = []
+        for patcher in patchers:
+            if patcher is None or patcher.model is None:
+                continue
+            save_data.append({
+                "model": patcher.model,                       # nn.Module (pickle‑able)
+                "load_device": str(patcher.load_device),
+                "offload_device": str(patcher.offload_device),
+                "size": patcher.size,
+                "weight_inplace_update": patcher.weight_inplace_update,
+            })
+
+        if not save_data:
+            return
+
+        torch.save(save_data, path)
+
+        with _CACHE_LOCK:
+            _VRAM_CACHE_DISK[cache_name] = path
+
+        logger.info(
+            "[VRAM Cache] Saved %d model(s) to disk cache '%s' (%s)",
+            len(save_data), cache_name, path,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[VRAM Cache] Disk save failed for '%s': %s", cache_name, exc)
+
+
+def _load_from_disk(cache_name: str) -> Optional[List[ModelPatcher]]:
+    """Deserialise a ``.pt`` file back into ModelPatcher objects."""
+    with _CACHE_LOCK:
+        path = _VRAM_CACHE_DISK.get(cache_name)
+
+    if path is None or not os.path.exists(path):
+        return None
+
+    try:
+        save_data = torch.load(path, weights_only=False)
+
+        patchers: List[ModelPatcher] = []
+        for item in save_data:
+            load_dev = torch.device(item["load_device"])
+            offload_dev = torch.device(item["offload_device"])
+            patcher = ModelPatcher(
+                model=item["model"],
+                load_device=load_dev,
+                offload_device=offload_dev,
+                size=item["size"],
+                weight_inplace_update=item.get("weight_inplace_update", False),
+            )
+            patchers.append(patcher)
+
+        logger.info(
+            "[VRAM Cache] Loaded %d model(s) from disk cache '%s' (%s)",
+            len(patchers), cache_name, path,
+        )
+        return patchers
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[VRAM Cache] Disk load failed for '%s': %s", cache_name, exc)
+        return None
+
+
+def _estimate_models_ram_usage() -> int:
+    """Bytes needed to keep all currently‑loaded VRAM models on CPU."""
+    total = 0
+    for lm in comfy.model_management.current_loaded_models:
+        if lm.model is not None:
+            total += lm.model_memory()
+    return total
+
+
+def _wait_for_background_thread(cache_name: str) -> None:
+    """Block until a previous background disk‑save finishes (if any)."""
+    thread = _BACKGROUND_THREADS.get(cache_name)
+    if thread is not None and thread.is_alive():
+        logger.info(
+            "[VRAM Cache] Waiting for background disk save '%s' to complete …",
+            cache_name,
+        )
+        thread.join()
+
+
+# ---------------------------------------------------------------------------
+# Node classes
+# ---------------------------------------------------------------------------
+
+class SimpleGlobalVRAMCacheSaving:
+    """Save the current VRAM cache to RAM (and disk) and clear VRAM.
+
+    If enough system RAM is available the models are moved to CPU first (fast)
+    and a background thread saves them to disk without blocking downstream
+    nodes.  Otherwise the disk save happens synchronously before the node
+    returns.
+    """
+
+    CATEGORY = "Simple Utility ⛏️/Global"
+    FUNCTION = "execute"
+    RETURN_TYPES = ("*",)
+    RETURN_NAMES = ("passthrough",)
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "anything": ("*",),
+                "cache_name": ("STRING", {
+                    "default": "VRAM_cache",
+                    "multiline": False,
+                }),
+            },
+        }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, cache_name, anything):
+        if not cache_name or not cache_name.strip():
+            return "Cache name cannot be empty."
+        return True
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def execute(self, anything: Any, cache_name: str) -> Tuple[Any]:
+        cache_name = cache_name.strip()
+
+        # ── Collect ModelPatcher references ──────────────────────────
+        patchers: List[ModelPatcher] = []
+        for lm in comfy.model_management.current_loaded_models:
+            patcher = lm.model
+            if patcher is not None:
+                patchers.append(patcher)
+
+        if not patchers:
+            logger.info(
+                "[VRAM Cache] No models in VRAM to save for cache '%s'.",
+                cache_name,
+            )
+            return (anything,)
+
+        model_ram_needed = _estimate_models_ram_usage()
+        free_ram = comfy.model_management.get_free_ram()
+        safety_margin = max(int(model_ram_needed * 0.2), 512 * 1024 * 1024)
+        enough_ram = free_ram > (model_ram_needed + safety_margin)
+
+        if enough_ram:
+            # ── Fast path: RAM first, background disk save ───────────
+            logger.info(
+                "[VRAM Cache] Saving %d model(s) to RAM for cache '%s' "
+                "(%.1f MB needed, %.1f MB free). Background disk save follows.",
+                len(patchers),
+                cache_name,
+                model_ram_needed / (1024 ** 2),
+                free_ram / (1024 ** 2),
+            )
+
+            # Move weights from GPU → CPU
+            comfy.model_management.unload_all_models()
+            comfy.model_management.soft_empty_cache()
+
+            # Protect the patchers with strong references
+            with _CACHE_LOCK:
+                _VRAM_CACHE_RAM[cache_name] = patchers
+
+            # Wait for any prior background save of the same name
+            _wait_for_background_thread(cache_name)
+
+            thread = threading.Thread(
+                target=_save_to_disk,
+                args=(cache_name, patchers),
+                daemon=True,
+                name=f"vram_cache_disk_{cache_name}",
+            )
+            _BACKGROUND_THREADS[cache_name] = thread
+            thread.start()
+        else:
+            # ── Slow path: disk first (blocking), then clear VRAM ────
+            logger.info(
+                "[VRAM Cache] Not enough RAM (%.1f MB needed, %.1f MB free). "
+                "Saving %d model(s) to disk synchronously for cache '%s'.",
+                model_ram_needed / (1024 ** 2),
+                free_ram / (1024 ** 2),
+                len(patchers),
+                cache_name,
+            )
+
+            # Wait for any prior background save of the same name
+            _wait_for_background_thread(cache_name)
+
+            # Disk save while models are still resident (CPU or GPU)
+            _save_to_disk(cache_name, patchers)
+
+            # Now clear VRAM
+            comfy.model_management.unload_all_models()
+            comfy.model_management.soft_empty_cache()
+
+            # Still keep RAM references if possible (they cost nothing
+            # extra since the weights are already on CPU after unload)
+            with _CACHE_LOCK:
+                _VRAM_CACHE_RAM[cache_name] = patchers
+
+        logger.info(
+            "[VRAM Cache] Cache '%s' saved (%d model(s)).",
+            cache_name, len(patchers),
+        )
+        return (anything,)
+
+
+class SimpleGlobalVRAMCacheLoading:
+    """Restore a previously saved VRAM cache from RAM or disk.
+
+    Checks the RAM cache first (preserves full ModelPatcher state).
+    Falls back to the disk cache if the RAM entry is absent.
+    Raises an error when no cache with the given name exists.
+    """
+
+    CATEGORY = "Simple Utility ⛏️/Global"
+    FUNCTION = "execute"
+    RETURN_TYPES = ("*",)
+    RETURN_NAMES = ("passthrough",)
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "anything": ("*",),
+                "cache_name": ("STRING", {
+                    "default": "VRAM_cache",
+                    "multiline": False,
+                }),
+            },
+        }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, cache_name, anything):
+        if not cache_name or not cache_name.strip():
+            return "Cache name cannot be empty."
+        return True
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def execute(self, anything: Any, cache_name: str) -> Tuple[Any]:
+        cache_name = cache_name.strip()
+
+        patchers: Optional[List[ModelPatcher]] = None
+        source: Optional[str] = None
+
+        # ── 1. Try RAM cache ────────────────────────────────────────
+        with _CACHE_LOCK:
+            if cache_name in _VRAM_CACHE_RAM:
+                patchers = _VRAM_CACHE_RAM[cache_name]
+                source = "RAM"
+
+        # ── 2. Fallback: disk cache ─────────────────────────────────
+        if patchers is None:
+            # Ensure any in‑flight background save has finished
+            _wait_for_background_thread(cache_name)
+
+            patchers = _load_from_disk(cache_name)
+            if patchers is not None:
+                source = "disk"
+                # Promote to RAM cache for faster access next time
+                with _CACHE_LOCK:
+                    _VRAM_CACHE_RAM[cache_name] = patchers
+
+        # ── 3. Error if nothing was found ───────────────────────────
+        if patchers is None or len(patchers) == 0:
+            with _CACHE_LOCK:
+                ram_keys = list(_VRAM_CACHE_RAM.keys())
+                disk_keys = list(_VRAM_CACHE_DISK.keys())
+            raise RuntimeError(
+                f"[VRAM Cache] No cache found with name '{cache_name}'.\n\n"
+                f"Make sure a 'Simple Global VRAM Cache Saving' node with the "
+                f"same cache_name has been executed before this node.\n"
+                f"Available RAM caches: {ram_keys}\n"
+                f"Available disk caches: {disk_keys}"
+            )
+
+        # ── 4. Clear current VRAM and restore saved models ──────────
+        comfy.model_management.unload_all_models()
+        comfy.model_management.soft_empty_cache()
+
+        alive = [p for p in patchers if p is not None]
+        if alive:
+            comfy.model_management.load_models_gpu(alive)
+            logger.info(
+                "[VRAM Cache] Restored %d model(s) from %s cache '%s' to VRAM.",
+                len(alive), source, cache_name,
+            )
+
+        return (anything,)
+
+
+class SimpleVRAMCacheRAMClearing:
+    """Clear **all** VRAM caches currently held in system RAM.
+
+    Disk caches are **not** affected — they remain available for future
+    ``Simple Global VRAM Cache Loading`` nodes to fall back on.
+
+    This is useful to reclaim RAM after you no longer need the fast‑path
+    cached models.
+    """
+
+    CATEGORY = "Simple Utility ⛏️/Global"
+    FUNCTION = "execute"
+    RETURN_TYPES = ("*",)
+    RETURN_NAMES = ("passthrough",)
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "anything": ("*",),
+            },
+        }
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def execute(self, anything: Any) -> Tuple[Any]:
+        with _CACHE_LOCK:
+            count = len(_VRAM_CACHE_RAM)
+            _VRAM_CACHE_RAM.clear()
+
+        if count:
+            gc.collect()
+            logger.info(
+                "[VRAM Cache] Cleared %d RAM cache(s). Disk caches are unaffected.",
+                count,
+            )
+        else:
+            logger.info("[VRAM Cache] No RAM caches to clear.")
+
+        return (anything,)
+
+
+# ---------------------------------------------------------------------------
+# Node registration
+# ---------------------------------------------------------------------------
+
+NODE_CLASS_MAPPINGS = {
+    "SimpleGlobalVRAMCacheSaving": SimpleGlobalVRAMCacheSaving,
+    "SimpleGlobalVRAMCacheLoading": SimpleGlobalVRAMCacheLoading,
+    "SimpleVRAMCacheRAMClearing": SimpleVRAMCacheRAMClearing,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "SimpleGlobalVRAMCacheSaving": "⛏️ Simple Global VRAM Cache Saving",
+    "SimpleGlobalVRAMCacheLoading": "⛏️ Simple Global VRAM Cache Loading",
+    "SimpleVRAMCacheRAMClearing": "⛏️ Simple VRAM Cache RAM Clearing",
+}

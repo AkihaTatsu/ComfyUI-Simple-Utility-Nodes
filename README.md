@@ -296,7 +296,7 @@ OUTPUT2 = len(processed) if processed else 0
 
 ### Global Nodes
 
-Global nodes provide workflow-wide functionality including passing data between disconnected nodes using named variables, and monitoring all preview images across the workflow.
+Global nodes provide workflow-wide functionality including passing data between disconnected nodes using named variables, monitoring all preview images across the workflow, and saving/restoring the current VRAM model cache.
 
 **⚠️ IMPORTANT: Execution Order (for Global Variable nodes)**
 
@@ -381,16 +381,11 @@ Automatically monitor and display ALL preview/temporary/saved images generated b
 - **KSampler step previews** — see latent previews update live during sampling
 - **Automatic sync** — captures images from *any* node that produces them
 - **Does NOT pollute the image feed** — the node returns an empty `ui` dict
-- **Fullscreen viewer** — "🔎 Open Fullscreen Viewer" button opens a new browser tab with:
-  - Real-time WebSocket image updates (both binary previews and executed images)
-  - Image history sidebar with thumbnails
-  - Contain / Cover / Actual Size fit modes
-  - Drag-to-pan in Actual Size mode
-  - Fallback HTTP polling
+- **Fullscreen viewer** — "🔎 Open Fullscreen Viewer" button opens a new browser tab with the [Global Image Preview Viewer Page](#global-image-preview--fullscreen-viewer-page) (see section below for details)
 - Default color: Pale Blue (for easy identification)
 
 **Inputs:**
-- `trigger` (optional): Connect to any output to create an execution dependency
+- None (no connections required)
 
 **Outputs:**
 - None (this is a display-only output node)
@@ -408,5 +403,128 @@ Simply add the node to your canvas. When any workflow runs:
 ```
 
 </details>
+
+#### Global Image Preview — Fullscreen Viewer Page
+
+The fullscreen viewer is a standalone browser page that displays live images from the running workflow. It can be opened from the **🔎 Open Fullscreen Viewer** button on the node, or by navigating directly to:
+
+```
+http://<host>:<port>/simple_utility/global_image_preview/viewer
+```
+
+(e.g. `http://localhost:8188/simple_utility/global_image_preview/viewer` for a default local setup)
+
+<details>
+<summary>Details</summary>
+
+**Connection & Status:**
+- A coloured dot in the header shows the WebSocket connection state (green = connected, red = disconnected).
+- The workflow status badge shows whether ComfyUI is **Idle** or **Running**, and displays the class name of the currently executing node.
+- Falls back to HTTP polling every 300 ms when WebSocket is unavailable.
+
+**Image Display:**
+- Receives live **KSampler latent step previews** (`b_preview` binary WebSocket frames) and **final images** from PreviewImage / SaveImage nodes (`executed` events) in real time.
+- **Fit Mode** selector in the header:
+  - `Contain` — scale image to fit within the viewport (default).
+  - `Fill` — scale image to fill the viewport (may crop).
+  - `Actual Size` — display at native pixel resolution with scrollbars.
+- **Mouse wheel zoom** towards the cursor (in Contain / Fill modes).
+- **Drag-to-pan** with mouse or touch (when zoomed in, or in Actual Size mode).
+- **Double-click** to reset zoom back to 1×.
+- **Pinch-to-zoom** on touch devices.
+
+**History Sidebar:**
+- The **History** button toggles a thumbnail sidebar listing up to 50 recent images.
+- Click any thumbnail to open it in the main viewer.
+- The **🗑 Clear** button clears the history list.
+
+**Lightbox:**
+- Click any history thumbnail to open a full-size lightbox overlay.
+- Click the image inside the lightbox to open it in a new browser tab at full resolution.
+- Press **ESC** or click outside the image to close the lightbox.
+- On mobile the system back button / swipe gesture also closes the lightbox.
+
+**Workflow Controls:**
+- **✕ Interrupt** button — sends an interrupt signal to stop the currently running workflow (enabled only while a workflow is running).
+- **⟳ Rerun** button — re-queues the last workflow prompt:
+  - `Same Task` mode: interrupts any running workflow and re-queues the exact same prompt (seed unchanged).
+  - `New Task` mode: appends the prompt to the queue without interrupting.
+- These controls communicate with ComfyUI directly, so they work even when the ComfyUI browser tab is closed.
+
+**Mobile & Responsive:**
+- Controls collapse into a hamburger menu (☰) on narrow viewports.
+- Touch-optimised tap targets and pinch-to-zoom support.
+
+**Footer:**
+- Left side shows the current image's filename and type.
+- Right side shows the WebSocket / polling connection status.
+
+</details>
+
+#### ⛏️ Simple Global VRAM Cache Saving
+
+Save all models currently loaded in VRAM to RAM (and disk) and clear VRAM. Useful for temporarily freeing VRAM for other tasks without having to reload models from scratch.
+
+<details>
+<summary>Details</summary>
+
+**How it works:**
+- Collects all `ModelPatcher` references currently tracked by ComfyUI.
+- Checks available system RAM:
+  - **Enough RAM** → moves models from GPU to CPU immediately (fast, non-blocking), then saves to disk in a **background thread**. Downstream nodes continue executing right away.
+  - **Not enough RAM** → saves to disk **synchronously** first, then unloads VRAM.
+- VRAM is cleared via `unload_all_models` + `soft_empty_cache`.
+
+**Features:**
+- RAM and disk caches are **never** automatically evicted — they persist until overwritten by another save with the same `cache_name` or until ComfyUI restarts.
+- Disk cache is stored in a unique temp directory per ComfyUI instance; stale dirs from crashed sessions are cleaned up on startup.
+
+**Inputs:**
+- `anything`: Passthrough input (any data type)
+- `cache_name`: Name for the cache entry (default: `"VRAM_cache"`)
+
+**Outputs:**
+- `passthrough`: Passthrough of input
+
+</details>
+
+#### ⛏️ Simple Global VRAM Cache Loading
+
+Restore a previously saved VRAM cache from RAM or disk back into VRAM.
+
+<details>
+<summary>Details</summary>
+
+**How it works:**
+1. Checks the RAM cache first (fast, preserves full `ModelPatcher` state).
+2. If not in RAM, waits for any in-flight background disk save to finish, then loads from disk.
+3. Clears current VRAM and calls `load_models_gpu` with the restored model list.
+
+**Inputs:**
+- `anything`: Passthrough input (any data type)
+- `cache_name`: Name of the cache to restore (must match a prior Save node)
+
+**Outputs:**
+- `passthrough`: Passthrough of input
+
+**Note:** An error is raised when no cache with the given `cache_name` exists.
+
+</details>
+
+#### ⛏️ Simple VRAM Cache RAM Clearing
+
+Clear **all** VRAM caches currently held in system RAM. Disk caches are **not** affected and remain available for future loading.
+
+<details>
+<summary>Details</summary>
+
+**Inputs:**
+- `anything`: Passthrough input (any data type)
+
+**Outputs:**
+- `passthrough`: Passthrough of input
+
+**Usage:**
+Add this node after you no longer need the fast-path cached models to reclaim system RAM.  Disk caches can still be loaded by a `Simple Global VRAM Cache Loading` node after RAM is cleared.
 
 </details>
