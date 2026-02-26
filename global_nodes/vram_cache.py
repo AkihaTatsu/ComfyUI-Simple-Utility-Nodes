@@ -71,6 +71,21 @@ _CACHE_LOCK = threading.Lock()
 # Background disk‑save threads keyed by cache_name
 _BACKGROUND_THREADS: Dict[str, threading.Thread] = {}
 
+# Per-cache cancellation events — set() to signal the running thread to abort
+_CANCEL_EVENTS: Dict[str, threading.Event] = {}
+
+# Per-cache disk write locks — held while a file is being written so that
+# readers (_load_from_disk) never see a half-written file.
+_DISK_WRITE_LOCKS: Dict[str, threading.Lock] = {}
+
+
+def _get_disk_write_lock(cache_name: str) -> threading.Lock:
+    """Return (and lazily create) the per-cache disk write lock."""
+    with _CACHE_LOCK:
+        if cache_name not in _DISK_WRITE_LOCKS:
+            _DISK_WRITE_LOCKS[cache_name] = threading.Lock()
+        return _DISK_WRITE_LOCKS[cache_name]
+
 # Disk cache directory — every ComfyUI instance gets its own unique temp dir.
 # A common parent lives under the system temp folder so that leftover dirs
 # from crashed / killed instances can be discovered and cleaned up on restart.
@@ -194,7 +209,11 @@ def _collect_save_data(patchers: List[ModelPatcher]) -> list:
     return save_data
 
 
-def _save_to_disk(cache_name: str, patchers: List[ModelPatcher]) -> None:
+def _save_to_disk(
+    cache_name: str,
+    patchers: List[ModelPatcher],
+    cancel_event: Optional[threading.Event] = None,
+) -> None:
     """Serialise model nn.Modules + device metadata to disk.
 
     Uses standard ``torch.save`` (pickle) first.  If pickling fails (e.g.
@@ -202,7 +221,23 @@ def _save_to_disk(cache_name: str, patchers: List[ModelPatcher]) -> None:
     ``model_sampling.<locals>.ModelSampling``), falls back to ``dill`` as the
     pickle module.  Files saved via dill use a ``.dill`` extension so that
     ``_load_from_disk`` can choose the right deserialiser.
+
+    **Safety measures:**
+
+    * The entire write is performed under the per-cache *disk write lock*
+      so that ``_load_from_disk`` never reads a half-written file.
+    * Data is first written to a temporary file (``<final>.tmp``) and then
+      atomically swapped into place via ``os.replace``.
+    * If *cancel_event* is set at any checkpoint the thread aborts early and
+      cleans up the temp file, leaving the previous on-disk version intact.
     """
+
+    def _cancelled() -> bool:
+        return cancel_event is not None and cancel_event.is_set()
+
+    disk_lock = _get_disk_write_lock(cache_name)
+    tmp_path: Optional[str] = None
+
     try:
         _ensure_cache_dir()
 
@@ -210,47 +245,97 @@ def _save_to_disk(cache_name: str, patchers: List[ModelPatcher]) -> None:
         if not save_data:
             return
 
-        # ── Attempt 1: standard pickle ───────────────────────────────
-        try:
-            path = _disk_cache_path(cache_name, use_dill=False)
-            torch.save(save_data, path)
-            # Remove any stale dill variant for this name
-            _dill_path = _disk_cache_path(cache_name, use_dill=True)
-            if os.path.exists(_dill_path):
-                try:
-                    os.remove(_dill_path)
-                except OSError:
-                    pass
-        except (pickle.PicklingError, TypeError, AttributeError) as pkl_exc:
-            # ── Attempt 2: dill fallback ─────────────────────────────
-            if not _HAS_DILL:
-                raise RuntimeError(
-                    f"Standard pickle failed ({pkl_exc}). "
-                    f"Install 'dill' (pip install dill) to enable the "
-                    f"fallback serialiser for unpicklable model objects."
-                ) from pkl_exc
-
+        # Early cancellation check after data collection
+        if _cancelled():
             logger.info(
-                "[VRAM Cache] Standard pickle failed for '%s' (%s). "
-                "Retrying with dill …",
-                cache_name, pkl_exc,
+                "[VRAM Cache] Disk save cancelled for '%s' before writing.",
+                cache_name,
             )
-            path = _disk_cache_path(cache_name, use_dill=True)
-            torch.save(save_data, path, pickle_module=_dill)
-            # Remove any stale pickle variant for this name
-            _pkl_path = _disk_cache_path(cache_name, use_dill=False)
-            if os.path.exists(_pkl_path):
+            return
+
+        # Acquire the disk write lock — this blocks concurrent reads and
+        # forces a new save to wait until this one finishes or is cancelled.
+        with disk_lock:
+            # Re-check after acquiring the lock — a newer save may have
+            # signalled us to stop while we were waiting.
+            if _cancelled():
+                logger.info(
+                    "[VRAM Cache] Disk save cancelled for '%s' after acquiring lock.",
+                    cache_name,
+                )
+                return
+
+            # ── Attempt 1: standard pickle ───────────────────────────
+            used_dill = False
+            try:
+                final_path = _disk_cache_path(cache_name, use_dill=False)
+                tmp_path = final_path + ".tmp"
+                torch.save(save_data, tmp_path)
+            except (pickle.PicklingError, TypeError, AttributeError) as pkl_exc:
+                # Clean up the failed tmp file
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+
+                if _cancelled():
+                    logger.info(
+                        "[VRAM Cache] Disk save cancelled for '%s' after pickle failure.",
+                        cache_name,
+                    )
+                    return
+
+                # ── Attempt 2: dill fallback ─────────────────────────
+                if not _HAS_DILL:
+                    raise RuntimeError(
+                        f"Standard pickle failed ({pkl_exc}). "
+                        f"Install 'dill' (pip install dill) to enable the "
+                        f"fallback serialiser for unpicklable model objects."
+                    ) from pkl_exc
+
+                logger.info(
+                    "[VRAM Cache] Standard pickle failed for '%s' (%s). "
+                    "Retrying with dill …",
+                    cache_name, pkl_exc,
+                )
+                used_dill = True
+                final_path = _disk_cache_path(cache_name, use_dill=True)
+                tmp_path = final_path + ".tmp"
+                torch.save(save_data, tmp_path, pickle_module=_dill)
+
+            # Final cancellation check before the atomic swap
+            if _cancelled():
+                logger.info(
+                    "[VRAM Cache] Disk save cancelled for '%s' before commit.",
+                    cache_name,
+                )
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+                return
+
+            # ── Atomic swap: tmp → final ─────────────────────────────
+            os.replace(tmp_path, final_path)
+            tmp_path = None  # swap succeeded — nothing to clean up
+
+            # Remove the stale variant (the opposite serialiser)
+            stale_path = _disk_cache_path(cache_name, use_dill=not used_dill)
+            if os.path.exists(stale_path):
                 try:
-                    os.remove(_pkl_path)
+                    os.remove(stale_path)
                 except OSError:
                     pass
 
-        with _CACHE_LOCK:
-            _VRAM_CACHE_DISK[cache_name] = path
+            with _CACHE_LOCK:
+                _VRAM_CACHE_DISK[cache_name] = final_path
 
-        serialiser = "dill" if path.endswith(".dill") else "pickle"
+        # ── Success logging (outside the lock) ───────────────────────
+        serialiser = "dill" if used_dill else "pickle"
         try:
-            file_size_str = _fmt_size(os.path.getsize(path))
+            file_size_str = _fmt_size(os.path.getsize(final_path))
         except OSError:
             file_size_str = "unknown size"
         total_bytes = sum(d.get("size", 0) for d in save_data)
@@ -258,10 +343,18 @@ def _save_to_disk(cache_name: str, patchers: List[ModelPatcher]) -> None:
             "[VRAM Cache] Disk save complete for '%s': %d model(s), "
             "total model size %s, file size %s, serialiser: %s — %s",
             cache_name, len(save_data), _fmt_size(total_bytes),
-            file_size_str, serialiser, path,
+            file_size_str, serialiser, final_path,
         )
+
     except Exception as exc:  # noqa: BLE001
         logger.error("[VRAM Cache] Disk save failed for '%s': %s", cache_name, exc)
+    finally:
+        # Best-effort cleanup of the temp file if it was never committed
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 def _deserialise_patchers(save_data: list) -> List[ModelPatcher]:
@@ -302,39 +395,47 @@ def _load_from_disk(cache_name: str) -> Optional[List[ModelPatcher]]:
     if path is None or not os.path.exists(path):
         return None
 
-    try:
-        use_dill_load = path.endswith(".dill")
-        if use_dill_load:
-            if not _HAS_DILL:
-                logger.error(
-                    "[VRAM Cache] Cache '%s' was saved with dill but dill "
-                    "is not installed.  Install it with: pip install dill",
-                    cache_name,
-                )
-                return None
-            save_data = torch.load(path, pickle_module=_dill, weights_only=False)
-        else:
-            save_data = torch.load(path, weights_only=False)
+    # Acquire the disk write lock so we never read a half-written file.
+    disk_lock = _get_disk_write_lock(cache_name)
+    with disk_lock:
+        # Re-check existence — the file may have been removed by a
+        # cancelled save between our probe above and acquiring the lock.
+        if not os.path.exists(path):
+            return None
 
-        patchers = _deserialise_patchers(save_data)
-
-        serialiser = "dill" if use_dill_load else "pickle"
-        total_bytes = _patchers_total_bytes(patchers)
         try:
-            file_size_str = _fmt_size(os.path.getsize(path))
-        except OSError:
-            file_size_str = "unknown size"
-        logger.info(
-            "[VRAM Cache] Disk load complete for '%s': %d model(s), "
-            "total model size %s, file size %s, serialiser: %s",
-            cache_name, len(patchers), _fmt_size(total_bytes),
-            file_size_str, serialiser,
-        )
-        _log_patchers(patchers)
-        return patchers
-    except Exception as exc:  # noqa: BLE001
-        logger.error("[VRAM Cache] Disk load failed for '%s': %s", cache_name, exc)
-        return None
+            use_dill_load = path.endswith(".dill")
+            if use_dill_load:
+                if not _HAS_DILL:
+                    logger.error(
+                        "[VRAM Cache] Cache '%s' was saved with dill but dill "
+                        "is not installed.  Install it with: pip install dill",
+                        cache_name,
+                    )
+                    return None
+                save_data = torch.load(path, pickle_module=_dill, weights_only=False)
+            else:
+                save_data = torch.load(path, weights_only=False)
+
+            patchers = _deserialise_patchers(save_data)
+
+            serialiser = "dill" if use_dill_load else "pickle"
+            total_bytes = _patchers_total_bytes(patchers)
+            try:
+                file_size_str = _fmt_size(os.path.getsize(path))
+            except OSError:
+                file_size_str = "unknown size"
+            logger.info(
+                "[VRAM Cache] Disk load complete for '%s': %d model(s), "
+                "total model size %s, file size %s, serialiser: %s",
+                cache_name, len(patchers), _fmt_size(total_bytes),
+                file_size_str, serialiser,
+            )
+            _log_patchers(patchers)
+            return patchers
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[VRAM Cache] Disk load failed for '%s': %s", cache_name, exc)
+            return None
 
 
 def _estimate_models_ram_usage() -> int:
@@ -346,8 +447,42 @@ def _estimate_models_ram_usage() -> int:
     return total
 
 
+def _cancel_and_wait_background_thread(cache_name: str) -> None:
+    """Signal the running background save to stop, then block until it exits.
+
+    This is safe to call even when no thread is running for *cache_name*.
+    After returning, the caller is guaranteed that no background save is
+    in progress for this cache name and can safely start a new one.
+    """
+    cancel_evt = _CANCEL_EVENTS.get(cache_name)
+    thread = _BACKGROUND_THREADS.get(cache_name)
+
+    if thread is not None and thread.is_alive():
+        if cancel_evt is not None:
+            cancel_evt.set()  # signal the thread to abort
+        logger.info(
+            "[VRAM Cache] Signalled background disk save '%s' to stop; "
+            "waiting for it to finish …",
+            cache_name,
+        )
+        thread.join()
+        logger.info(
+            "[VRAM Cache] Previous background disk save '%s' has stopped.",
+            cache_name,
+        )
+
+    # Clean up stale references
+    _BACKGROUND_THREADS.pop(cache_name, None)
+    _CANCEL_EVENTS.pop(cache_name, None)
+
+
 def _wait_for_background_thread(cache_name: str) -> None:
-    """Block until a previous background disk‑save finishes (if any)."""
+    """Block until a previous background disk‑save finishes (if any).
+
+    Unlike ``_cancel_and_wait_background_thread`` this does **not** cancel;
+    it simply waits.  Used by the *load* path where we want the save to
+    complete so the file is readable.
+    """
     thread = _BACKGROUND_THREADS.get(cache_name)
     if thread is not None and thread.is_alive():
         logger.info(
@@ -453,12 +588,15 @@ class SimpleGlobalVRAMCacheSaving:
                 _free_vram_str(),
             )
 
-            # Wait for any prior background save of the same name
-            _wait_for_background_thread(cache_name)
+            # Cancel any prior background save of the same name
+            _cancel_and_wait_background_thread(cache_name)
+
+            cancel_event = threading.Event()
+            _CANCEL_EVENTS[cache_name] = cancel_event
 
             thread = threading.Thread(
                 target=_save_to_disk,
-                args=(cache_name, patchers),
+                args=(cache_name, patchers, cancel_event),
                 daemon=True,
                 name=f"vram_cache_disk_{cache_name}",
             )
@@ -478,8 +616,8 @@ class SimpleGlobalVRAMCacheSaving:
                 len(patchers), _fmt_size(total_bytes), cache_name,
             )
 
-            # Wait for any prior background save of the same name
-            _wait_for_background_thread(cache_name)
+            # Cancel any prior background save of the same name
+            _cancel_and_wait_background_thread(cache_name)
 
             # Disk save while models are still resident (CPU or GPU)
             _save_to_disk(cache_name, patchers)
