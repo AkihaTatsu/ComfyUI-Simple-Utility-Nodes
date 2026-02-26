@@ -131,6 +131,47 @@ def _ensure_cache_dir() -> None:
     os.makedirs(_CACHE_DIR, exist_ok=True)
 
 
+# ---------------------------------------------------------------------------
+# Size / label helpers
+# ---------------------------------------------------------------------------
+
+def _fmt_size(num_bytes: int) -> str:
+    """Format a byte count as a human-readable MB or GB string."""
+    if num_bytes >= 1024 ** 3:
+        return f"{num_bytes / (1024 ** 3):.2f} GB"
+    return f"{num_bytes / (1024 ** 2):.2f} MB"
+
+
+def _patchers_total_bytes(patchers: List[ModelPatcher]) -> int:
+    """Sum the reported size of each ModelPatcher in bytes."""
+    return sum(p.size for p in patchers if p is not None)
+
+
+def _patcher_label(patcher: ModelPatcher) -> str:
+    """Human-readable label for a single ModelPatcher."""
+    name = type(patcher.model).__name__ if patcher.model is not None else "?"
+    return f"{name} ({_fmt_size(patcher.size)})"
+
+
+def _free_vram_str() -> str:
+    """Return a human-readable string of free VRAM on the default CUDA device.
+    Returns 'N/A' if CUDA is unavailable or the query fails."""
+    try:
+        if torch.cuda.is_available():
+            free = comfy.model_management.get_free_memory(torch.device("cuda"))
+            return _fmt_size(free)
+    except Exception:
+        pass
+    return "N/A"
+
+
+def _log_patchers(patchers: List[ModelPatcher], indent: str = "  ") -> None:
+    """Log one line per patcher at DEBUG level with index, name and size."""
+    for i, p in enumerate(patchers, start=1):
+        if p is not None:
+            logger.debug("%s#%d  %s", indent, i, _patcher_label(p))
+
+
 def _disk_cache_path(cache_name: str, use_dill: bool = False) -> str:
     safe = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in cache_name)
     ext = ".dill" if use_dill else ".pt"
@@ -208,9 +249,16 @@ def _save_to_disk(cache_name: str, patchers: List[ModelPatcher]) -> None:
             _VRAM_CACHE_DISK[cache_name] = path
 
         serialiser = "dill" if path.endswith(".dill") else "pickle"
+        try:
+            file_size_str = _fmt_size(os.path.getsize(path))
+        except OSError:
+            file_size_str = "unknown size"
+        total_bytes = sum(d.get("size", 0) for d in save_data)
         logger.info(
-            "[VRAM Cache] Saved %d model(s) to disk cache '%s' via %s (%s)",
-            len(save_data), cache_name, serialiser, path,
+            "[VRAM Cache] Disk save complete for '%s': %d model(s), "
+            "total model size %s, file size %s, serialiser: %s — %s",
+            cache_name, len(save_data), _fmt_size(total_bytes),
+            file_size_str, serialiser, path,
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("[VRAM Cache] Disk save failed for '%s': %s", cache_name, exc)
@@ -271,10 +319,18 @@ def _load_from_disk(cache_name: str) -> Optional[List[ModelPatcher]]:
         patchers = _deserialise_patchers(save_data)
 
         serialiser = "dill" if use_dill_load else "pickle"
+        total_bytes = _patchers_total_bytes(patchers)
+        try:
+            file_size_str = _fmt_size(os.path.getsize(path))
+        except OSError:
+            file_size_str = "unknown size"
         logger.info(
-            "[VRAM Cache] Loaded %d model(s) from disk cache '%s' via %s (%s)",
-            len(patchers), cache_name, serialiser, path,
+            "[VRAM Cache] Disk load complete for '%s': %d model(s), "
+            "total model size %s, file size %s, serialiser: %s",
+            cache_name, len(patchers), _fmt_size(total_bytes),
+            file_size_str, serialiser,
         )
+        _log_patchers(patchers)
         return patchers
     except Exception as exc:  # noqa: BLE001
         logger.error("[VRAM Cache] Disk load failed for '%s': %s", cache_name, exc)
@@ -359,20 +415,27 @@ class SimpleGlobalVRAMCacheSaving:
             )
             return (anything,)
 
+        total_bytes = _patchers_total_bytes(patchers)
         model_ram_needed = _estimate_models_ram_usage()
         free_ram = comfy.model_management.get_free_ram()
         safety_margin = max(int(model_ram_needed * 0.2), 512 * 1024 * 1024)
         enough_ram = free_ram > (model_ram_needed + safety_margin)
 
+        # ── Log what we're about to cache ────────────────────────────
+        logger.info(
+            "[VRAM Cache] Caching %d model(s) — total size: %s "
+            "| free RAM: %s | free VRAM: %s",
+            len(patchers), _fmt_size(total_bytes),
+            _fmt_size(free_ram), _free_vram_str(),
+        )
+        _log_patchers(patchers)
+
         if enough_ram:
             # ── Fast path: RAM first, background disk save ───────────
             logger.info(
-                "[VRAM Cache] Saving %d model(s) to RAM for cache '%s' "
-                "(%.1f MB needed, %.1f MB free). Background disk save follows.",
-                len(patchers),
-                cache_name,
-                model_ram_needed / (1024 ** 2),
-                free_ram / (1024 ** 2),
+                "[VRAM Cache] RAM is sufficient — moving %d model(s) (%s) "
+                "to RAM for cache '%s'. Background disk save will follow.",
+                len(patchers), _fmt_size(total_bytes), cache_name,
             )
 
             # Move weights from GPU → CPU
@@ -382,6 +445,13 @@ class SimpleGlobalVRAMCacheSaving:
             # Protect the patchers with strong references
             with _CACHE_LOCK:
                 _VRAM_CACHE_RAM[cache_name] = patchers
+
+            logger.info(
+                "[VRAM Cache] %d model(s) (%s) saved to RAM cache '%s'. "
+                "Free VRAM after unload: %s",
+                len(patchers), _fmt_size(total_bytes), cache_name,
+                _free_vram_str(),
+            )
 
             # Wait for any prior background save of the same name
             _wait_for_background_thread(cache_name)
@@ -394,15 +464,18 @@ class SimpleGlobalVRAMCacheSaving:
             )
             _BACKGROUND_THREADS[cache_name] = thread
             thread.start()
+            logger.info(
+                "[VRAM Cache] Background disk save started for cache '%s'.",
+                cache_name,
+            )
         else:
             # ── Slow path: disk first (blocking), then clear VRAM ────
             logger.info(
-                "[VRAM Cache] Not enough RAM (%.1f MB needed, %.1f MB free). "
-                "Saving %d model(s) to disk synchronously for cache '%s'.",
-                model_ram_needed / (1024 ** 2),
-                free_ram / (1024 ** 2),
-                len(patchers),
-                cache_name,
+                "[VRAM Cache] Not enough RAM for in-memory copy "
+                "(%s needed + margin, %s free) — saving %d model(s) (%s) "
+                "to disk synchronously for cache '%s'.",
+                _fmt_size(model_ram_needed), _fmt_size(free_ram),
+                len(patchers), _fmt_size(total_bytes), cache_name,
             )
 
             # Wait for any prior background save of the same name
@@ -420,10 +493,13 @@ class SimpleGlobalVRAMCacheSaving:
             with _CACHE_LOCK:
                 _VRAM_CACHE_RAM[cache_name] = patchers
 
-        logger.info(
-            "[VRAM Cache] Cache '%s' saved (%d model(s)).",
-            cache_name, len(patchers),
-        )
+            logger.info(
+                "[VRAM Cache] %d model(s) (%s) saved to disk cache '%s'. "
+                "Free VRAM after unload: %s",
+                len(patchers), _fmt_size(total_bytes), cache_name,
+                _free_vram_str(),
+            )
+
         return (anything,)
 
 
@@ -501,15 +577,27 @@ class SimpleGlobalVRAMCacheLoading:
             )
 
         # ── 4. Clear current VRAM and restore saved models ──────────
+        alive = [p for p in patchers if p is not None]
+        total_bytes = _patchers_total_bytes(alive)
+
+        logger.info(
+            "[VRAM Cache] Restoring %d model(s) (%s) from %s cache '%s' to VRAM "
+            "| free VRAM before: %s",
+            len(alive), _fmt_size(total_bytes), source, cache_name,
+            _free_vram_str(),
+        )
+        _log_patchers(alive)
+
         comfy.model_management.unload_all_models()
         comfy.model_management.soft_empty_cache()
 
-        alive = [p for p in patchers if p is not None]
         if alive:
             comfy.model_management.load_models_gpu(alive)
             logger.info(
-                "[VRAM Cache] Restored %d model(s) from %s cache '%s' to VRAM.",
-                len(alive), source, cache_name,
+                "[VRAM Cache] Restored %d model(s) (%s) from %s cache '%s' to VRAM. "
+                "Free VRAM after restore: %s",
+                len(alive), _fmt_size(total_bytes), source, cache_name,
+                _free_vram_str(),
             )
 
         return (anything,)
@@ -545,17 +633,32 @@ class SimpleVRAMCacheRAMClearing:
 
     def execute(self, anything: Any) -> Tuple[Any]:
         with _CACHE_LOCK:
-            count = len(_VRAM_CACHE_RAM)
+            # Snapshot sizes before clearing
+            snapshot = {
+                name: list(plist)
+                for name, plist in _VRAM_CACHE_RAM.items()
+            }
             _VRAM_CACHE_RAM.clear()
 
-        if count:
-            gc.collect()
-            logger.info(
-                "[VRAM Cache] Cleared %d RAM cache(s). Disk caches are unaffected.",
-                count,
-            )
-        else:
+        if not snapshot:
             logger.info("[VRAM Cache] No RAM caches to clear.")
+            return (anything,)
+
+        total_cleared_bytes = 0
+        for name, plist in snapshot.items():
+            cache_bytes = _patchers_total_bytes(plist)
+            total_cleared_bytes += cache_bytes
+            logger.info(
+                "[VRAM Cache]   '%s' — %d model(s), %s",
+                name, len(plist), _fmt_size(cache_bytes),
+            )
+
+        gc.collect()
+        logger.info(
+            "[VRAM Cache] Cleared %d RAM cache(s) — total size freed: %s. "
+            "Disk caches are unaffected.",
+            len(snapshot), _fmt_size(total_cleared_bytes),
+        )
 
         return (anything,)
 
