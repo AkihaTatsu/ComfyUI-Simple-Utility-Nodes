@@ -53,7 +53,14 @@ except ImportError:
 import comfy.model_management
 from comfy.model_patcher import ModelPatcher
 
-logger = logging.getLogger("ComfyUI-Simple-Utility-Nodes")
+# Use the root logger — this is the convention used throughout ComfyUI's
+# own codebase (logging.info(), logging.error(), …).  A named logger
+# (logging.getLogger("some-name")) relies on *propagation* to reach the root
+# logger's handlers.  In practice, that extra indirection can silently drop
+# messages when called from daemon background threads on Windows, because of
+# subtle interactions with ComfyUI's LogInterceptor (an io.TextIOWrapper
+# subclass that replaces sys.stderr).
+logger = logging.getLogger()
 
 # ---------------------------------------------------------------------------
 # Cache storage

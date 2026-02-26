@@ -9,7 +9,7 @@ import os
 import threading
 import logging
 
-logger = logging.getLogger("ComfyUI-Simple-Utility-Nodes")
+logger = logging.getLogger()
 
 from .time_nodes import NODE_CLASS_MAPPINGS as TIME_NODE_CLASS_MAPPINGS
 from .time_nodes import NODE_DISPLAY_NAME_MAPPINGS as TIME_NODE_DISPLAY_NAME_MAPPINGS
