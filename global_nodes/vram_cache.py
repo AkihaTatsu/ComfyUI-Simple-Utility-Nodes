@@ -35,12 +35,20 @@ import gc
 import glob
 import logging
 import os
+import pickle
 import shutil
 import tempfile
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+
+try:
+    import dill as _dill
+    _HAS_DILL = True
+except ImportError:
+    _dill = None
+    _HAS_DILL = False
 
 import comfy.model_management
 from comfy.model_patcher import ModelPatcher
@@ -123,72 +131,149 @@ def _ensure_cache_dir() -> None:
     os.makedirs(_CACHE_DIR, exist_ok=True)
 
 
-def _disk_cache_path(cache_name: str) -> str:
+def _disk_cache_path(cache_name: str, use_dill: bool = False) -> str:
     safe = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in cache_name)
-    return os.path.join(_CACHE_DIR, f"{safe}.pt")
+    ext = ".dill" if use_dill else ".pt"
+    return os.path.join(_CACHE_DIR, f"{safe}{ext}")
+
+
+def _collect_save_data(patchers: List[ModelPatcher]) -> list:
+    """Build a serialisable list of dicts from ModelPatcher objects."""
+    save_data = []
+    for patcher in patchers:
+        if patcher is None or patcher.model is None:
+            continue
+        save_data.append({
+            "model": patcher.model,                       # nn.Module
+            "load_device": str(patcher.load_device),
+            "offload_device": str(patcher.offload_device),
+            "size": patcher.size,
+            "weight_inplace_update": patcher.weight_inplace_update,
+        })
+    return save_data
 
 
 def _save_to_disk(cache_name: str, patchers: List[ModelPatcher]) -> None:
-    """Serialise model nn.Modules + device metadata to a ``.pt`` file."""
+    """Serialise model nn.Modules + device metadata to disk.
+
+    Uses standard ``torch.save`` (pickle) first.  If pickling fails (e.g.
+    dynamically-created local classes such as
+    ``model_sampling.<locals>.ModelSampling``), falls back to ``dill`` as the
+    pickle module.  Files saved via dill use a ``.dill`` extension so that
+    ``_load_from_disk`` can choose the right deserialiser.
+    """
     try:
         _ensure_cache_dir()
-        path = _disk_cache_path(cache_name)
 
-        save_data = []
-        for patcher in patchers:
-            if patcher is None or patcher.model is None:
-                continue
-            save_data.append({
-                "model": patcher.model,                       # nn.Module (pickle‑able)
-                "load_device": str(patcher.load_device),
-                "offload_device": str(patcher.offload_device),
-                "size": patcher.size,
-                "weight_inplace_update": patcher.weight_inplace_update,
-            })
-
+        save_data = _collect_save_data(patchers)
         if not save_data:
             return
 
-        torch.save(save_data, path)
+        # ── Attempt 1: standard pickle ───────────────────────────────
+        try:
+            path = _disk_cache_path(cache_name, use_dill=False)
+            torch.save(save_data, path)
+            # Remove any stale dill variant for this name
+            _dill_path = _disk_cache_path(cache_name, use_dill=True)
+            if os.path.exists(_dill_path):
+                try:
+                    os.remove(_dill_path)
+                except OSError:
+                    pass
+        except (pickle.PicklingError, TypeError, AttributeError) as pkl_exc:
+            # ── Attempt 2: dill fallback ─────────────────────────────
+            if not _HAS_DILL:
+                raise RuntimeError(
+                    f"Standard pickle failed ({pkl_exc}). "
+                    f"Install 'dill' (pip install dill) to enable the "
+                    f"fallback serialiser for unpicklable model objects."
+                ) from pkl_exc
+
+            logger.info(
+                "[VRAM Cache] Standard pickle failed for '%s' (%s). "
+                "Retrying with dill …",
+                cache_name, pkl_exc,
+            )
+            path = _disk_cache_path(cache_name, use_dill=True)
+            torch.save(save_data, path, pickle_module=_dill)
+            # Remove any stale pickle variant for this name
+            _pkl_path = _disk_cache_path(cache_name, use_dill=False)
+            if os.path.exists(_pkl_path):
+                try:
+                    os.remove(_pkl_path)
+                except OSError:
+                    pass
 
         with _CACHE_LOCK:
             _VRAM_CACHE_DISK[cache_name] = path
 
+        serialiser = "dill" if path.endswith(".dill") else "pickle"
         logger.info(
-            "[VRAM Cache] Saved %d model(s) to disk cache '%s' (%s)",
-            len(save_data), cache_name, path,
+            "[VRAM Cache] Saved %d model(s) to disk cache '%s' via %s (%s)",
+            len(save_data), cache_name, serialiser, path,
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("[VRAM Cache] Disk save failed for '%s': %s", cache_name, exc)
 
 
+def _deserialise_patchers(save_data: list) -> List[ModelPatcher]:
+    """Reconstruct ModelPatcher objects from a loaded save_data list."""
+    patchers: List[ModelPatcher] = []
+    for item in save_data:
+        load_dev = torch.device(item["load_device"])
+        offload_dev = torch.device(item["offload_device"])
+        patcher = ModelPatcher(
+            model=item["model"],
+            load_device=load_dev,
+            offload_device=offload_dev,
+            size=item["size"],
+            weight_inplace_update=item.get("weight_inplace_update", False),
+        )
+        patchers.append(patcher)
+    return patchers
+
+
 def _load_from_disk(cache_name: str) -> Optional[List[ModelPatcher]]:
-    """Deserialise a ``.pt`` file back into ModelPatcher objects."""
+    """Deserialise a ``.pt`` or ``.dill`` file back into ModelPatcher objects.
+
+    Checks the path stored in ``_VRAM_CACHE_DISK`` first.  If that is missing,
+    probes both extensions so a cache saved in a previous run (before a
+    restart) can still be found.
+    """
     with _CACHE_LOCK:
         path = _VRAM_CACHE_DISK.get(cache_name)
+
+    # Fallback: probe both extensions if the mapping is empty
+    if path is None or not os.path.exists(path):
+        for use_dill in (False, True):
+            candidate = _disk_cache_path(cache_name, use_dill=use_dill)
+            if os.path.exists(candidate):
+                path = candidate
+                break
 
     if path is None or not os.path.exists(path):
         return None
 
     try:
-        save_data = torch.load(path, weights_only=False)
+        use_dill_load = path.endswith(".dill")
+        if use_dill_load:
+            if not _HAS_DILL:
+                logger.error(
+                    "[VRAM Cache] Cache '%s' was saved with dill but dill "
+                    "is not installed.  Install it with: pip install dill",
+                    cache_name,
+                )
+                return None
+            save_data = torch.load(path, pickle_module=_dill, weights_only=False)
+        else:
+            save_data = torch.load(path, weights_only=False)
 
-        patchers: List[ModelPatcher] = []
-        for item in save_data:
-            load_dev = torch.device(item["load_device"])
-            offload_dev = torch.device(item["offload_device"])
-            patcher = ModelPatcher(
-                model=item["model"],
-                load_device=load_dev,
-                offload_device=offload_dev,
-                size=item["size"],
-                weight_inplace_update=item.get("weight_inplace_update", False),
-            )
-            patchers.append(patcher)
+        patchers = _deserialise_patchers(save_data)
 
+        serialiser = "dill" if use_dill_load else "pickle"
         logger.info(
-            "[VRAM Cache] Loaded %d model(s) from disk cache '%s' (%s)",
-            len(patchers), cache_name, path,
+            "[VRAM Cache] Loaded %d model(s) from disk cache '%s' via %s (%s)",
+            len(patchers), cache_name, serialiser, path,
         )
         return patchers
     except Exception as exc:  # noqa: BLE001

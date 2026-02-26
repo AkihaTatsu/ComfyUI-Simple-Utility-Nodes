@@ -6,3 +6,7 @@
 
 # Required for rich text formatting in Simple Print to Console node
 rich>=10.0.0
+
+# Required for VRAM Cache disk serialisation fallback
+# (handles unpicklable local classes in some model samplers)
+dill>=0.3.0
