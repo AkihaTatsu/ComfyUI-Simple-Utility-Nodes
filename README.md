@@ -469,15 +469,24 @@ Save all models currently loaded in VRAM to RAM (and disk) and clear VRAM. Usefu
 <summary>Details</summary>
 
 **How it works:**
-- Collects all `ModelPatcher` references currently tracked by ComfyUI.
-- Checks available system RAM:
-  - **Enough RAM** → moves models from GPU to CPU immediately (fast, non-blocking), then saves to disk in a **background thread**. Downstream nodes continue executing right away.
-  - **Not enough RAM** → saves to disk **synchronously** first, then unloads VRAM.
-- VRAM is cleared via `unload_all_models` + `soft_empty_cache`.
+
+1. Captures a flat state dict of every tensor loaded on GPU via ComfyUI's `current_loaded_models`.
+2. Measures total cache size vs. available system RAM and auto-selects one of two branches:
+   - **RAM + Disk** (free RAM ≥ cache size):
+     1. Moves all VRAM tensors to CPU RAM — protected with per-entry `mmap` guards and `weakref.finalize` so they are read-only and safely garbage-collected even if ComfyUI is killed.
+     2. Completely cleans VRAM (`unload_all_models` + `soft_empty_cache`).
+     3. Launches a **background daemon thread** that writes the RAM cache to disk using **safetensors** (raw binary, no pickle). The node finishes immediately — disk I/O is non-blocking.
+   - **Disk Only** (free RAM < cache size):
+     1. Launches a background thread that reads tensors **directly from VRAM** and writes to disk using safetensors.
+     2. Waits until the disk save completes.
+     3. Cleans VRAM afterwards.
+3. If a cache with the same `cache_name` already exists, it is overwritten (both RAM and disk).
+4. Detailed logging at every step: tensor count, model sizes, elapsed time, write throughput.
 
 **Features:**
-- RAM and disk caches are **never** automatically evicted — they persist until overwritten by another save with the same `cache_name` or until ComfyUI restarts.
-- Disk cache is stored in a unique temp directory per ComfyUI instance; stale dirs from crashed sessions are cleaned up on startup.
+- Disk format is **safetensors** — fastest possible serialisation, no pickle, dtype-preserving.
+- RAM cache entries are mmap-guarded and reference-counted; the OS reclaims them on abnormal exit.
+- A `ResourceWarning` is emitted when free RAM is insufficient or dangerously tight.
 
 **Inputs:**
 - `anything`: Passthrough input (any data type)
@@ -496,9 +505,13 @@ Restore a previously saved VRAM cache from RAM or disk back into VRAM.
 <summary>Details</summary>
 
 **How it works:**
-1. Checks the RAM cache first (fast, preserves full `ModelPatcher` state).
-2. If not in RAM, waits for any in-flight background disk save to finish, then loads from disk.
-3. Clears current VRAM and calls `load_models_gpu` with the restored model list.
+
+1. Completely cleans current VRAM (only ComfyUI-managed models, not other processes).
+2. Checks for a **RAM cache** with the given name (fastest path — zero-copy read of the read-only mmap-guarded tensors, then `.to(cuda)`).
+3. If no RAM cache exists, checks for a **disk cache** (safetensors file).
+   - If a background disk-save thread for the same name is still running, waits for it to finish first.
+   - Loads the safetensors file directly into VRAM using `safetensors.torch.load_file(device="cuda")`.
+4. Raises `FileNotFoundError` if neither RAM nor disk cache is found.
 
 **Inputs:**
 - `anything`: Passthrough input (any data type)
@@ -507,13 +520,11 @@ Restore a previously saved VRAM cache from RAM or disk back into VRAM.
 **Outputs:**
 - `passthrough`: Passthrough of input
 
-**Note:** An error is raised when no cache with the given `cache_name` exists.
-
 </details>
 
-#### ⛏️ Simple VRAM Cache RAM Clearing
+#### ⛏️ Simple Global VRAM Cache RAM Clearing
 
-Clear **all** VRAM caches currently held in system RAM. Disk caches are **not** affected and remain available for future loading.
+Clear **all** VRAM caches currently held in system RAM.  Before clearing, this node **waits for every in-flight background save thread to finish**, ensuring all model data has been fully persisted to disk.  Disk caches are **not** affected and remain available for future loading.
 
 <details>
 <summary>Details</summary>
@@ -525,6 +536,6 @@ Clear **all** VRAM caches currently held in system RAM. Disk caches are **not** 
 - `passthrough`: Passthrough of input
 
 **Usage:**
-Add this node after you no longer need the fast-path cached models to reclaim system RAM.  Disk caches can still be loaded by a `Simple Global VRAM Cache Loading` node after RAM is cleared.
+Add this node after you no longer need the fast-path cached models to reclaim system RAM.  All background disk-save threads are joined first so that disk caches are guaranteed to be complete.  Disk caches can still be loaded by a `Simple Global VRAM Cache Loading` node after RAM is cleared.
 
 </details>

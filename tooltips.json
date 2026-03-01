@@ -167,7 +167,8 @@
         "node": "Save the current VRAM cache (all loaded models) to system RAM and disk, then clear VRAM. If enough RAM is available, models are moved to CPU first and a background thread saves to disk without blocking. If RAM is tight, models are saved to disk synchronously. The saved cache is protected from garbage collection and persists until overwritten or ComfyUI restarts.",
         "inputs": {
             "anything": "Passthrough input. Any data type is accepted and will be passed to the passthrough output.",
-            "cache_name": "A unique name to identify this saved VRAM state. Use the same name in 'Simple Global VRAM Cache Loading' to restore it. Default is 'VRAM_cache'. Cannot be empty."
+            "cache_name": "A unique name to identify this saved VRAM state. Use the same name in 'Simple Global VRAM Cache Loading' to restore it. Default is 'VRAM_cache'. Cannot be empty.",
+            "cache_mode": "Choose saving strategy: 'RAM + Disk' (default) stages models in CPU RAM first for non-blocking disk I/O — the node finishes as soon as RAM caching is done. 'Only to Disk' skips the RAM cache and writes directly to disk (blocking). When 'RAM + Disk' is selected but free RAM is insufficient, it automatically falls back to disk-only."
         },
         "outputs": {
             "passthrough": "Passthrough of the 'anything' input data. Returns None if 'anything' is not connected."
@@ -183,7 +184,7 @@
             "passthrough": "Passthrough of the 'anything' input data. Returns None if 'anything' is not connected."
         }
     },
-    "SimpleVRAMCacheRAMClearing": {
+    "SimpleGlobalVRAMCacheRAMClearing": {
         "node": "Clear ALL VRAM caches currently held in system RAM. Disk caches are NOT affected and remain available for future loading. Useful to reclaim RAM after the cached models are no longer needed.",
         "inputs": {
             "anything": "OPTIONAL: Passthrough input. Any data type is accepted and will be passed to the passthrough output. If not connected, the output will be None."

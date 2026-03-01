@@ -10,7 +10,7 @@ app.registerExtension({
             nodeData.name === "SimpleGlobalVariableOutput" ||
             nodeData.name === "SimpleGlobalVRAMCacheSaving" ||
             nodeData.name === "SimpleGlobalVRAMCacheLoading" ||
-            nodeData.name === "SimpleVRAMCacheRAMClearing") {
+            nodeData.name === "SimpleGlobalVRAMCacheRAMClearing") {
             
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
@@ -37,7 +37,7 @@ app.registerExtension({
         // Input slot 0 = 'anything' (optional passthrough), Output slot 0 = 'passthrough'
         if (nodeData.name === "SimpleGlobalVRAMCacheSaving" ||
             nodeData.name === "SimpleGlobalVRAMCacheLoading" ||
-            nodeData.name === "SimpleVRAMCacheRAMClearing") {
+            nodeData.name === "SimpleGlobalVRAMCacheRAMClearing") {
             installPassthroughTypeResolver(nodeType, 0, 0);
         }
 
