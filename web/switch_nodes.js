@@ -1,7 +1,9 @@
 import { app } from "../../scripts/app.js";
 import {
     installSwitchTypeResolver,
-    installInversedSwitchTypeResolver
+    installInversedSwitchTypeResolver,
+    installBooleanSwitchTypeResolver,
+    installInversedBooleanSwitchTypeResolver
 } from "./type_resolver.js";
 
 app.registerExtension({
@@ -161,6 +163,14 @@ app.registerExtension({
                     }, 100);
                 }
             };
+        }
+
+        if (nodeData.name === "SimpleBooleanSwitch") {
+            installBooleanSwitchTypeResolver(nodeType);
+        }
+
+        if (nodeData.name === "SimpleInversedBooleanSwitch") {
+            installInversedBooleanSwitchTypeResolver(nodeType);
         }
     }
 });

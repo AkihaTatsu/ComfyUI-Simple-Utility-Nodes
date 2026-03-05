@@ -197,3 +197,68 @@ export function installInversedSwitchTypeResolver(nodeType) {
         app.graph.setDirtyCanvas(true, true);
     };
 }
+
+/**
+ * Boolean switch: two `*` inputs (on_true, on_false) → one `*` output.
+ *
+ * Used by SimpleBooleanSwitch.
+ */
+export function installBooleanSwitchTypeResolver(nodeType) {
+    const orig = nodeType.prototype.onConnectionsChange;
+
+    nodeType.prototype.onConnectionsChange = function (...args) {
+        orig?.apply(this, args);
+
+        let type = "*";
+        // Check both inputs for a concrete upstream type
+        if (this.inputs) {
+            for (let i = 0; i < this.inputs.length; i++) {
+                type = resolveFromInput(this, i);
+                if (type !== "*") break;
+            }
+        }
+        // Fallback: check the single output's downstream targets
+        if (type === "*") type = resolveFromOutput(this, 0);
+
+        applyTypeToOutput(this, 0, type, type !== "*" ? type : "anything");
+
+        // Colour all wildcard input links
+        if (this.inputs) {
+            for (let i = 0; i < this.inputs.length; i++) {
+                if (this.inputs[i].type === "*") colorInputLink(this, i, type);
+            }
+        }
+        app.graph.setDirtyCanvas(true, true);
+    };
+}
+
+/**
+ * Inversed boolean switch: one `*` input (anything) → two `*` outputs (on_true, on_false).
+ *
+ * Used by SimpleInversedBooleanSwitch.
+ */
+export function installInversedBooleanSwitchTypeResolver(nodeType) {
+    const orig = nodeType.prototype.onConnectionsChange;
+
+    nodeType.prototype.onConnectionsChange = function (...args) {
+        orig?.apply(this, args);
+
+        let type = resolveFromInput(this, 0);
+        // Fallback: scan all output targets
+        if (type === "*" && this.outputs) {
+            for (let i = 0; i < this.outputs.length; i++) {
+                type = resolveFromOutput(this, i);
+                if (type !== "*") break;
+            }
+        }
+
+        // Apply to every output slot
+        if (this.outputs) {
+            for (let i = 0; i < this.outputs.length; i++) {
+                applyTypeToOutput(this, i, type);
+            }
+        }
+        colorInputLink(this, 0, type);
+        app.graph.setDirtyCanvas(true, true);
+    };
+}

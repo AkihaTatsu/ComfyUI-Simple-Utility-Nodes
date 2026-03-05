@@ -94,7 +94,7 @@
         }
     },
     "SimpleInversedSwitchWithRandomMode": {
-        "node": "Distribute one input to one of multiple outputs with optional random selection. The number of visible output slots is controlled by output_num.",
+        "node": "Distribute one input to one of multiple outputs with optional random selection. The number of visible output slots is controlled by output_num. Unselected outputs use ExecutionBlocker to prevent downstream nodes from executing.",
         "inputs": {
             "anything": "The input value to distribute (any data type).",
             "output_num": "Number of output slots to use (1-20).",
@@ -104,7 +104,29 @@
         "outputs": {
             "output_1": "First output slot.",
             "output_2": "Second output slot.",
-            "output_N": "N-th output slot. Only the selected slot receives the input value; others are None."
+            "output_N": "N-th output slot. Only the selected slot receives the input value; others are blocked from execution."
+        }
+    },
+    "SimpleBooleanSwitch": {
+        "node": "Select one of two inputs based on a boolean value. Uses lazy evaluation so only the selected input's upstream graph is executed.",
+        "inputs": {
+            "on_true": "The input to use when boolean is True (any data type). Only evaluated when selected.",
+            "on_false": "The input to use when boolean is False (any data type). Only evaluated when selected.",
+            "boolean": "The boolean selector. True selects on_true, False selects on_false."
+        },
+        "outputs": {
+            "anything": "The value from the selected input."
+        }
+    },
+    "SimpleInversedBooleanSwitch": {
+        "node": "Route one input to one of two outputs based on a boolean value. The unselected output uses ExecutionBlocker to prevent downstream nodes from executing.",
+        "inputs": {
+            "anything": "The input value to route (any data type).",
+            "boolean": "The boolean selector. True routes to on_true, False routes to on_false."
+        },
+        "outputs": {
+            "on_true": "Receives the input value when boolean is True; blocked from execution otherwise.",
+            "on_false": "Receives the input value when boolean is False; blocked from execution otherwise."
         }
     },
     "SimplePrintToConsole": {
@@ -171,26 +193,26 @@
             "cache_mode": "Choose saving strategy: 'RAM + Disk' (default) stages models in CPU RAM first for non-blocking disk I/O — the node finishes as soon as RAM caching is done. 'Only to Disk' skips the RAM cache and writes directly to disk (blocking). When 'RAM + Disk' is selected but free RAM is insufficient, it automatically falls back to disk-only."
         },
         "outputs": {
-            "passthrough": "Passthrough of the 'anything' input data. Returns None if 'anything' is not connected."
+            "passthrough": "Passthrough of the 'anything' input data."
         }
     },
     "SimpleGlobalVRAMCacheLoading": {
         "node": "Restore a previously saved VRAM cache from RAM or disk. Checks the RAM cache first (fast, full model state preserved). Falls back to disk cache if RAM entry is absent. Clears current VRAM before restoring. Raises an error if no cache with the given name exists.",
         "inputs": {
             "cache_name": "The name of the VRAM cache to restore. Must match a cache_name from a previously executed 'Simple Global VRAM Cache Saving' node. Default is 'VRAM_cache'. Cannot be empty.",
-            "anything": "OPTIONAL: Passthrough input. Any data type is accepted and will be passed to the passthrough output. If not connected, the output will be None."
+            "anything": "Passthrough input. Any data type is accepted and will be passed to the passthrough output."
         },
         "outputs": {
-            "passthrough": "Passthrough of the 'anything' input data. Returns None if 'anything' is not connected."
+            "passthrough": "Passthrough of the 'anything' input data."
         }
     },
     "SimpleGlobalVRAMCacheRAMClearing": {
         "node": "Clear ALL VRAM caches currently held in system RAM. Disk caches are NOT affected and remain available for future loading. Useful to reclaim RAM after the cached models are no longer needed.",
         "inputs": {
-            "anything": "OPTIONAL: Passthrough input. Any data type is accepted and will be passed to the passthrough output. If not connected, the output will be None."
+            "anything": "Passthrough input. Any data type is accepted and will be passed to the passthrough output."
         },
         "outputs": {
-            "passthrough": "Passthrough of the 'anything' input data. Returns None if 'anything' is not connected."
+            "passthrough": "Passthrough of the 'anything' input data."
         }
     }
 }

@@ -226,7 +226,7 @@ Select one input from multiple inputs, with optional random selection. The numbe
 
 #### ⛏️ Simple Inversed Switch with Random Mode
 
-Distribute one input to one of multiple outputs, with optional random selection. The number of visible output slots is controlled by the output_num widget.
+Distribute one input to one of multiple outputs, with optional random selection. The number of visible output slots is controlled by the output_num widget. **Unselected outputs use `ExecutionBlocker` to prevent downstream nodes from executing entirely** — they are not simply set to `None`.
 
 <details>
 <summary>Details</summary>
@@ -238,7 +238,41 @@ Distribute one input to one of multiple outputs, with optional random selection.
 - `select_random`: If Yes, select output randomly
 
 **Outputs:**
-- `output_1` to `output_N`: Output slots. Only the selected slot receives the input value; others are None.
+- `output_1` to `output_N`: Output slots. Only the selected slot receives the input value; all other slots are blocked with `ExecutionBlocker` so their downstream graphs never execute.
+
+</details>
+
+#### ⛏️ Simple Boolean Switch
+
+Select one of two inputs based on a boolean value. Uses lazy evaluation so only the selected input's upstream graph is executed — the unselected branch is never evaluated.
+
+<details>
+<summary>Details</summary>
+
+**Inputs:**
+- `on_true`: The input to use when boolean is True (any data type, lazy)
+- `on_false`: The input to use when boolean is False (any data type, lazy)
+- `boolean`: The boolean selector (default: True)
+
+**Outputs:**
+- `anything`: The value from the selected input
+
+</details>
+
+#### ⛏️ Simple Inversed Boolean Switch
+
+Route one input to one of two outputs based on a boolean value. **The unselected output uses `ExecutionBlocker` to prevent downstream nodes from executing entirely** — they are not simply set to `None`.
+
+<details>
+<summary>Details</summary>
+
+**Inputs:**
+- `anything`: The input value to route (any data type)
+- `boolean`: The boolean selector (default: True)
+
+**Outputs:**
+- `on_true`: Receives the input value when boolean is True; blocked from execution otherwise
+- `on_false`: Receives the input value when boolean is False; blocked from execution otherwise
 
 </details>
 

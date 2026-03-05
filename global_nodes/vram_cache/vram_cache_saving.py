@@ -90,14 +90,12 @@ class SimpleGlobalVRAMCacheSaving:
                         "default": settings.get("default_cache_mode", "RAM + Disk"),
                     },
                 ),
-            },
-            "optional": {
                 "anything": ("*",),
             },
         }
 
     @classmethod
-    def VALIDATE_INPUTS(cls, cache_name, cache_mode, anything=None):
+    def VALIDATE_INPUTS(cls, cache_name, cache_mode, anything):
         if not cache_name or not cache_name.strip():
             return "Cache name cannot be empty."
         if cache_mode not in _CACHE_MODES:
@@ -109,7 +107,7 @@ class SimpleGlobalVRAMCacheSaving:
         self,
         cache_name: str,
         cache_mode: str = "RAM + Disk",
-        anything: Any = None,
+        anything: Any = None,  # kept default for internal safety only
     ) -> Tuple[Any]:
         cache_name = cache_name.strip()
         t_start = time.perf_counter()

@@ -136,20 +136,18 @@ class SimpleGlobalVRAMCacheLoading:
                         "multiline": False,
                     },
                 ),
-            },
-            "optional": {
                 "anything": ("*",),
             },
         }
 
     @classmethod
-    def VALIDATE_INPUTS(cls, cache_name, anything=None):
+    def VALIDATE_INPUTS(cls, cache_name, anything):
         if not cache_name or not cache_name.strip():
             return "Cache name cannot be empty."
         return True
 
     # ── Main execution ────────────────────────────────────────
-    def execute(self, cache_name: str, anything: Any = None) -> Tuple[Any]:
+    def execute(self, cache_name: str, anything: Any = None) -> Tuple[Any]:  # default kept for internal safety only
         cache_name = cache_name.strip()
         t_start = time.perf_counter()
 

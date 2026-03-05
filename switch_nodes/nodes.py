@@ -4,6 +4,8 @@ import json
 import os
 from typing import Any, Tuple
 
+from comfy_execution.graph_utils import ExecutionBlocker
+
 from .utils import distribute_to_outputs, select_from_inputs, UNCONNECTED
 
 # Load settings
@@ -144,21 +146,107 @@ class SimpleInversedSwitchWithRandomMode:
         )
         
         # Pad outputs to max_num for consistent return
+        # Use ExecutionBlocker(None) for unselected outputs to prevent
+        # downstream nodes from executing
         max_num = SETTINGS["SimpleInversedSwitchWithRandomMode"]["max_num"]
         while len(outputs) < max_num:
             outputs.append(None)
         
+        # Replace None with ExecutionBlocker for unselected outputs
+        outputs = [
+            v if v is not None else ExecutionBlocker(None)
+            for v in outputs
+        ]
+        
         return tuple(outputs)
+
+
+class SimpleBooleanSwitch:
+    """Select one of two inputs based on a boolean value."""
+    
+    CATEGORY = "Simple Utility ⛏️/Switch"
+    FUNCTION = "execute"
+    RETURN_TYPES = ("*",)
+    RETURN_NAMES = ("anything",)
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "on_true": ("*", {"lazy": True}),
+                "on_false": ("*", {"lazy": True}),
+                "boolean": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "on_true",
+                    "label_off": "on_false"
+                }),
+            }
+        }
+    
+    def check_lazy_status(self, on_true=None, on_false=None, boolean=True):
+        """Only request the input that will actually be used."""
+        needed = "on_true" if boolean else "on_false"
+        return [needed]
+    
+    def execute(
+        self,
+        on_true: Any = None,
+        on_false: Any = None,
+        boolean: bool = True
+    ) -> Tuple[Any]:
+        """Return the selected input."""
+        if boolean:
+            return (on_true,)
+        else:
+            return (on_false,)
+
+
+class SimpleInversedBooleanSwitch:
+    """Route one input to one of two outputs based on a boolean value."""
+    
+    CATEGORY = "Simple Utility ⛏️/Switch"
+    FUNCTION = "execute"
+    OUTPUT_NODE = True
+    RETURN_TYPES = ("*", "*")
+    RETURN_NAMES = ("on_true", "on_false")
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "anything": ("*",),
+                "boolean": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "on_true",
+                    "label_off": "on_false"
+                }),
+            }
+        }
+    
+    def execute(
+        self,
+        anything: Any,
+        boolean: bool = True
+    ) -> Tuple[Any, Any]:
+        """Route input to the selected output; block the other."""
+        if boolean:
+            return (anything, ExecutionBlocker(None))
+        else:
+            return (ExecutionBlocker(None), anything)
 
 
 # Node class mappings
 NODE_CLASS_MAPPINGS = {
     "SimpleSwitchWithRandomMode": SimpleSwitchWithRandomMode,
     "SimpleInversedSwitchWithRandomMode": SimpleInversedSwitchWithRandomMode,
+    "SimpleBooleanSwitch": SimpleBooleanSwitch,
+    "SimpleInversedBooleanSwitch": SimpleInversedBooleanSwitch,
 }
 
 # Display name mappings
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SimpleSwitchWithRandomMode": "⛏️ Simple Switch with Random Mode",
     "SimpleInversedSwitchWithRandomMode": "⛏️ Simple Inversed Switch with Random Mode",
+    "SimpleBooleanSwitch": "⛏️ Simple Boolean Switch",
+    "SimpleInversedBooleanSwitch": "⛏️ Simple Inversed Boolean Switch",
 }

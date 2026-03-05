@@ -41,14 +41,13 @@ class SimpleGlobalVRAMCacheRAMClearing:
     @classmethod
     def INPUT_TYPES(cls):
         return {
-            "required": {},
-            "optional": {
+            "required": {
                 "anything": ("*",),
             },
         }
 
     # ── Main execution ────────────────────────────────────────
-    def execute(self, anything: Any = None) -> Tuple[Any]:
+    def execute(self, anything: Any = None) -> Tuple[Any]:  # default kept for internal safety only
         t_start = time.perf_counter()
 
         # Step 1 – wait for all background disk-save threads ───

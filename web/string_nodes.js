@@ -631,6 +631,16 @@ app.registerExtension({
 
                 syncVisibility();
 
+                // Re-sync after workflow restore — onConfigure is called
+                // after the framework has set all widget values from the
+                // saved workflow, so display_mode is up-to-date here.
+                const origOnConfigure = this.onConfigure;
+                this.onConfigure = function () {
+                    const r = origOnConfigure?.apply(this, arguments);
+                    syncVisibility();
+                    return r;
+                };
+
                 return result;
             };
 

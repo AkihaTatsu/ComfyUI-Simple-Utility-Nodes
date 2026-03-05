@@ -302,8 +302,13 @@ def _bulk_concat_transfer(
 
         offset = 0
         for key, (dtype, shape, nbytes) in zip(gpu_keys, meta):
-            byte_slice = big_cpu[offset:offset + nbytes]
-            result[key] = byte_slice.view(dtype).reshape(shape).clone()
+            # .clone() the byte slice so it owns its storage starting at
+            # offset 0.  Without this, mixed-dtype concat can leave the
+            # slice at a storage offset that is not divisible by the
+            # target dtype's element size (e.g. offset 6 for float32),
+            # causing "storage_offset() must be divisible by …" errors.
+            byte_slice = big_cpu[offset:offset + nbytes].clone()
+            result[key] = byte_slice.view(dtype).reshape(shape)
             offset += nbytes
         del big_cpu
 
@@ -447,7 +452,7 @@ class RAMCacheManager:
         with cls._init_lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
-                cls._instance._caches: Dict[str, _RAMCacheEntry] = {}
+                cls._instance._caches = {}
                 cls._instance._lock = threading.Lock()
             return cls._instance
 
@@ -705,7 +710,7 @@ class ToDiskMonitorManager:
         with cls._init_lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
-                cls._instance._monitors: Dict[str, _ToDiskMonitor] = {}
+                cls._instance._monitors = {}
                 cls._instance._lock = threading.Lock()
             return cls._instance
 
