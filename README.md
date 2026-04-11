@@ -1,6 +1,26 @@
 # ComfyUI Simple Utility Nodes
 
-A collection of simple utility nodes for ComfyUI including time-related, string manipulation, switch, script, and global nodes.
+A collection of simple utility nodes for ComfyUI including time-related, string manipulation, string file I/O, switch, script, and global nodes.
+
+## Autofix (Cross-Platform Model Paths)
+
+This package now includes a startup-time autofix that targets cross-platform workflow portability for model path strings.
+
+What it does at ComfyUI launch:
+
+- Detects and logs the current runtime system (`system`, `release`, `machine`, `os.name`, and path separator).
+- Installs global runtime patches so model-relative path separators are normalized silently when needed.
+
+What gets normalized:
+
+- Model file path resolution through ComfyUI `folder_paths.get_full_path()` / `get_full_path_or_raise()`.
+- Embedding file lookup (`embedding:...`) through `comfy.sd1_clip.load_embed()`.
+- Combo/list input validation in the ComfyUI execution validator, so values like `a/b/model.safetensors` and `a\b\model.safetensors` can match each other across Linux/Windows workflows.
+
+Scope:
+
+- The patch is global at runtime (not just this node pack's own nodes), so it affects all nodes that rely on these core ComfyUI loading/validation paths.
+- This is a runtime compatibility layer. It does not rewrite files on disk or modify workflow JSON content permanently.
 
 ## Installation
 
@@ -139,6 +159,67 @@ Split a string into two parts using a delimiter.
 **Outputs:**
 - `first_part`: Text before the delimiter
 - `second_part`: Text after the delimiter
+
+</details>
+
+#### ⛏️ Simple Loading String from File
+
+Load a string from a text file with selectable encoding.
+
+<details>
+<summary>Details</summary>
+
+**Inputs:**
+- No input connection slots by default
+- `file_path`: Path to the input file
+  - Absolute paths are used directly
+  - Relative paths are resolved from the current ComfyUI working directory
+- `encoding`: Text encoding used for reading (default: `utf-8`)
+  - Dropdown options are loaded from `string_nodes/encodings.json`
+  - Includes all packaged text encodings detected in the runtime environment
+- `working_dir_display`: Read-only display string in the node UI
+  - Shows `Working Dir: <path>`
+  - Uses the same dedicated read-only STRING display box style as Time nodes
+  - Includes a `Copy Working Directory` button directly below the display box
+  - Clicking the button copies only the path itself (without the `Working Dir: ` prefix)
+  - Shows a ComfyUI canvas toast notification for copy success/failure
+  - Automatically set when the node is created
+  - Automatically refreshed after each workflow execution
+  - Working directory path is normalized via cross-platform Python path handling
+
+**Outputs:**
+- `string`: Full file content as a string
+
+</details>
+
+#### ⛏️ Simple Saving String to File
+
+Save an input string to a text file with selectable encoding.
+
+<details>
+<summary>Details</summary>
+
+**Inputs:**
+- `string`: Input string to write to file (only input connection slot)
+- `file_path`: Path to the output file
+  - Absolute paths are used directly
+  - Relative paths are resolved from the current ComfyUI working directory
+  - Parent directories are created automatically when needed
+- `encoding`: Text encoding used for writing (default: `utf-8`)
+  - Dropdown options are loaded from `string_nodes/encodings.json`
+  - Includes all packaged text encodings detected in the runtime environment
+- `working_dir_display`: Read-only display string in the node UI
+  - Shows `Working Dir: <path>`
+  - Uses the same dedicated read-only STRING display box style as Time nodes
+  - Includes a `Copy Working Directory` button directly below the display box
+  - Clicking the button copies only the path itself (without the `Working Dir: ` prefix)
+  - Shows a ComfyUI canvas toast notification for copy success/failure
+  - Automatically set when the node is created
+  - Automatically refreshed after each workflow execution
+  - Working directory path is normalized via cross-platform Python path handling
+
+**Outputs:**
+- `passthrough`: Passthrough of input string after saving completes
 
 </details>
 

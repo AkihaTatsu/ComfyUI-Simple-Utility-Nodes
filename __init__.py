@@ -2,7 +2,7 @@
 ComfyUI Simple Utility Nodes
 
 A collection of simple utility nodes for ComfyUI including time-related,
-string manipulation, switch, script, and global nodes.
+string manipulation, string file I/O, switch, script, and global nodes.
 """
 
 import os
@@ -10,6 +10,11 @@ import threading
 import logging
 
 logger = logging.getLogger()
+
+from .autofix import apply_model_path_autofix
+
+# Apply global cross-platform model-path autofix as early as possible.
+apply_model_path_autofix()
 
 from .time_nodes import NODE_CLASS_MAPPINGS as TIME_NODE_CLASS_MAPPINGS
 from .time_nodes import NODE_DISPLAY_NAME_MAPPINGS as TIME_NODE_DISPLAY_NAME_MAPPINGS

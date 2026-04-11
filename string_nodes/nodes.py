@@ -2,14 +2,43 @@
 
 import json
 import os
-from typing import Any, Tuple
+import time
+from typing import Tuple
 
-from .utils import append_string, sever_string, wrap_string
+from .utils import (
+    append_string,
+    get_working_dir_display,
+    get_working_dir_path,
+    load_string_from_file,
+    save_string_to_file,
+    sever_string,
+    wrap_string,
+)
 
 # Load settings
 _SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "settings.json")
 with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
     SETTINGS = json.load(f)
+
+_ENCODINGS_PATH = os.path.join(os.path.dirname(__file__), "encodings.json")
+with open(_ENCODINGS_PATH, "r", encoding="utf-8") as f:
+    _ENCODINGS_PAYLOAD = json.load(f)
+
+_AVAILABLE_ENCODINGS = tuple(_ENCODINGS_PAYLOAD.get("encodings", []))
+if not _AVAILABLE_ENCODINGS:
+    _AVAILABLE_ENCODINGS = ("utf-8",)
+
+
+def _get_default_encoding(settings_key: str) -> str:
+    """Return a safe default encoding for a node."""
+    default_encoding = SETTINGS[settings_key].get("default_encoding", "utf-8")
+    if default_encoding in _AVAILABLE_ENCODINGS:
+        return default_encoding
+
+    if "utf-8" in _AVAILABLE_ENCODINGS:
+        return "utf-8"
+
+    return _AVAILABLE_ENCODINGS[0]
 
 
 class SimpleStringAppending:
@@ -129,6 +158,148 @@ class SimpleStringSevering:
         return (first_part, second_part)
 
 
+class SimpleLoadingStringFromFile:
+    """Load a string from a text file."""
+
+    CATEGORY = "Simple Utility ⛏️/String"
+    FUNCTION = "execute"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("string",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        settings = SETTINGS["SimpleLoadingStringFromFile"]
+        return {
+            "required": {
+                "file_path": ("STRING", {
+                    "default": settings["default_file_path"],
+                    "multiline": False,
+                    "forceInput": False,
+                    "defaultInput": False
+                }),
+                "encoding": (_AVAILABLE_ENCODINGS, {
+                    "default": _get_default_encoding("SimpleLoadingStringFromFile"),
+                    "defaultInput": False
+                }),
+                "working_dir_display": ("STRING", {
+                    "default": get_working_dir_display(),
+                    "multiline": False,
+                    "forceInput": False,
+                    "defaultInput": False
+                }),
+            }
+        }
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        """Force re-execution so file content is reloaded every run."""
+        return time.time_ns()
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, file_path, encoding, working_dir_display):
+        """Validate load node inputs."""
+        if not file_path or not file_path.strip():
+            return "File path cannot be empty."
+        if encoding not in _AVAILABLE_ENCODINGS:
+            return f"Unsupported encoding: {encoding}"
+        return True
+
+    def execute(
+        self,
+        file_path: str,
+        encoding: str,
+        working_dir_display: str
+    ) -> dict:
+        """Execute the file loading operation."""
+        try:
+            loaded_string = load_string_from_file(file_path, encoding)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to load string from file: {exc}") from exc
+
+        working_dir = get_working_dir_display()
+        working_dir_path = get_working_dir_path()
+        return {
+            "ui": {
+                "working_dir": [working_dir],
+                "working_dir_path": [working_dir_path]
+            },
+            "result": (loaded_string,)
+        }
+
+
+class SimpleSavingStringToFile:
+    """Save a string to a text file."""
+
+    CATEGORY = "Simple Utility ⛏️/String"
+    FUNCTION = "execute"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("passthrough",)
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        settings = SETTINGS["SimpleSavingStringToFile"]
+        return {
+            "required": {
+                "string": ("STRING", {"forceInput": True}),
+                "file_path": ("STRING", {
+                    "default": settings["default_file_path"],
+                    "multiline": False,
+                    "forceInput": False,
+                    "defaultInput": False
+                }),
+                "encoding": (_AVAILABLE_ENCODINGS, {
+                    "default": _get_default_encoding("SimpleSavingStringToFile"),
+                    "defaultInput": False
+                }),
+                "working_dir_display": ("STRING", {
+                    "default": get_working_dir_display(),
+                    "multiline": False,
+                    "forceInput": False,
+                    "defaultInput": False
+                }),
+            }
+        }
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        """Always execute so writes happen every workflow run."""
+        return float("nan")
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, string, file_path, encoding, working_dir_display):
+        """Validate save node inputs."""
+        if not file_path or not file_path.strip():
+            return "File path cannot be empty."
+        if encoding not in _AVAILABLE_ENCODINGS:
+            return f"Unsupported encoding: {encoding}"
+        return True
+
+    def execute(
+        self,
+        string: str,
+        file_path: str,
+        encoding: str,
+        working_dir_display: str
+    ) -> dict:
+        """Execute the file saving operation."""
+        try:
+            saved_path = save_string_to_file(string, file_path, encoding)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to save string to file: {exc}") from exc
+
+        working_dir = get_working_dir_display()
+        working_dir_path = get_working_dir_path()
+        return {
+            "ui": {
+                "text": [f"Saved to: {saved_path}"],
+                "working_dir": [working_dir],
+                "working_dir_path": [working_dir_path]
+            },
+            "result": (string,)
+        }
+
+
 class SimpleMarkdownString:
     """A markdown note node with click-to-edit behavior and string output.
 
@@ -216,6 +387,8 @@ NODE_CLASS_MAPPINGS = {
     "SimpleStringAppending": SimpleStringAppending,
     "SimpleStringWrapping": SimpleStringWrapping,
     "SimpleStringSevering": SimpleStringSevering,
+    "SimpleLoadingStringFromFile": SimpleLoadingStringFromFile,
+    "SimpleSavingStringToFile": SimpleSavingStringToFile,
     "SimpleMarkdownString": SimpleMarkdownString,
     "SimpleMarkdownStringDisplay": SimpleMarkdownStringDisplay,
 }
@@ -225,6 +398,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SimpleStringAppending": "⛏️ Simple String Appending",
     "SimpleStringWrapping": "⛏️ Simple String Wrapping",
     "SimpleStringSevering": "⛏️ Simple String Severing",
+    "SimpleLoadingStringFromFile": "⛏️ Simple Loading String from File",
+    "SimpleSavingStringToFile": "⛏️ Simple Saving String to File",
     "SimpleMarkdownString": "⛏️ Simple Markdown String",
     "SimpleMarkdownStringDisplay": "⛏️ Simple Markdown String Display",
 }

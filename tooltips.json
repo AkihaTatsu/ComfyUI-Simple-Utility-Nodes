@@ -60,6 +60,29 @@
             "second_part": "The second part of the severed string (after the selected delimiter)."
         }
     },
+    "SimpleLoadingStringFromFile": {
+        "node": "Load a string from a text file. Supports relative paths (resolved against current working directory) and selectable text encodings. Includes a 'Copy Working Directory' button under the read-only working-dir display. This node has no input connections by default.",
+        "inputs": {
+            "file_path": "Path to the file to read. Relative paths are resolved from the displayed working directory.",
+            "encoding": "Text encoding used to decode the file content. Options come from the packaged encodings list JSON. Default is utf-8.",
+            "working_dir_display": "Internal value mirrored to a dedicated read-only STRING display widget (same style as time nodes) that shows the current process working directory for relative path resolution. Automatically refreshed when the node is created and after workflow execution. The 'Copy Working Directory' button copies only the directory path (without the 'Working Dir: ' prefix) and shows a canvas toast notification."
+        },
+        "outputs": {
+            "string": "The full file content as a string."
+        }
+    },
+    "SimpleSavingStringToFile": {
+        "node": "Save an input string to a text file. Supports relative paths (resolved against current working directory), selectable text encodings, and automatic parent directory creation. Includes a 'Copy Working Directory' button under the read-only working-dir display. This node has one input connection (`string`) by default.",
+        "inputs": {
+            "string": "The string content to write to file.",
+            "file_path": "Path to the output file. Relative paths are resolved from the displayed working directory.",
+            "encoding": "Text encoding used to write the file. Options come from the packaged encodings list JSON. Default is utf-8.",
+            "working_dir_display": "Internal value mirrored to a dedicated read-only STRING display widget (same style as time nodes) that shows the current process working directory for relative path resolution. Automatically refreshed when the node is created and after workflow execution. The 'Copy Working Directory' button copies only the directory path (without the 'Working Dir: ' prefix) and shows a canvas toast notification."
+        },
+        "outputs": {
+            "passthrough": "Passthrough of the input string after saving completes."
+        }
+    },
     "SimpleMarkdownString": {
         "node": "A markdown note node with click-to-edit rich text rendering and string output. Click the rendered markdown to edit, press ESC or click elsewhere to re-render. Supports GitHub Flavored Markdown, KaTeX math formulae, emoji shortcodes, images, tables, code blocks, and more.",
         "inputs": {

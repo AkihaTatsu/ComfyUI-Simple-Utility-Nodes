@@ -3,6 +3,10 @@
 # Note: This is a ComfyUI custom node package.
 # ComfyUI must be installed separately.
 # See: https://github.com/comfyanonymous/ComfyUI
+#
+# String file I/O nodes (load/save) rely only on Python's built-in codecs,
+# and browser Clipboard API (with execCommand fallback) for copy action,
+# so no extra third-party dependency is required for encoding/copy support.
 
 # Required for rich text formatting in Simple Print to Console node
 rich>=10.0.0

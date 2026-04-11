@@ -364,6 +364,207 @@ function addEnhancedMarkdownWidget(node, name) {
     return widget;
 }
 
+const WORKING_DIR_PREFIX = "Working Dir: ";
+const WORKING_DIR_PENDING = "(pending workflow execution)";
+
+function extractWorkingDirPath(displayValue) {
+    if (typeof displayValue !== "string") {
+        return "";
+    }
+
+    if (displayValue.startsWith(WORKING_DIR_PREFIX)) {
+        const extracted = displayValue.slice(WORKING_DIR_PREFIX.length);
+        if (extracted === WORKING_DIR_PENDING) {
+            return "";
+        }
+        return extracted;
+    }
+
+    return "";
+}
+
+function showCanvasNotification(summary, detail, severity = "info", life = 3000) {
+    try {
+        app.extensionManager?.toast?.add?.({
+            severity,
+            summary,
+            detail,
+            life,
+        });
+        return;
+    } catch (err) {
+        // Fall through to secondary fallback.
+    }
+
+    try {
+        app.ui?.dialog?.show?.(`${summary}\n${detail}`);
+        return;
+    } catch (err) {
+        // Ignore and use console fallback.
+    }
+
+    if (severity === "error") {
+        console.error(`[SimpleUtility] ${summary}: ${detail}`);
+    } else {
+        console.info(`[SimpleUtility] ${summary}: ${detail}`);
+    }
+}
+
+function copyTextWithExecCommand(text) {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "readonly");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-9999px";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    let copied = false;
+    try {
+        copied = document.execCommand("copy");
+    } finally {
+        document.body.removeChild(textarea);
+    }
+
+    return copied;
+}
+
+async function copyTextToClipboard(text) {
+    if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+
+    if (!copyTextWithExecCommand(text)) {
+        throw new Error("Clipboard API unavailable and execCommand copy failed.");
+    }
+}
+
+async function copyWorkingDirFromNode(node) {
+    const pathFromState = typeof node.workingDirRawPath === "string"
+        ? node.workingDirRawPath
+        : "";
+
+    const pathFromDisplay = extractWorkingDirPath(
+        node.workingDirDisplayWidget?.value
+    );
+
+    const pathToCopy = pathFromState || pathFromDisplay;
+    if (!pathToCopy) {
+        showCanvasNotification(
+            "Copy Failed",
+            "Working directory is empty.",
+            "warn",
+            3500
+        );
+        return;
+    }
+
+    try {
+        await copyTextToClipboard(pathToCopy);
+        showCanvasNotification(
+            "Copied",
+            `Working directory copied to clipboard:\n${pathToCopy}`,
+            "success",
+            3200
+        );
+    } catch (err) {
+        const message = err?.message || String(err);
+        showCanvasNotification(
+            "Copy Failed",
+            `Unable to copy working directory:\n${message}`,
+            "error",
+            4500
+        );
+    }
+}
+
+function findWorkingDirSourceWidget(node) {
+    return node.widgets?.find(w => w.name === "working_dir_display");
+}
+
+function configureWorkingDirDisplayWidget(node, app) {
+    const sourceWidget = findWorkingDirSourceWidget(node);
+    if (!sourceWidget) return;
+
+    sourceWidget.hidden = true;
+    sourceWidget.options = sourceWidget.options || {};
+    sourceWidget.options.hidden = true;
+
+    if (!node.workingDirDisplayWidget) {
+        const widget = ComfyWidgets["STRING"](
+            node,
+            "working_dir",
+            ["STRING", { multiline: true }],
+            app
+        ).widget;
+
+        widget.inputEl.readOnly = true;
+        if (widget.element) {
+            widget.element.readOnly = true;
+        }
+        widget.serializeValue = async () => "";
+
+        node.workingDirDisplayWidget = widget;
+    }
+
+    if (!node.copyWorkingDirButton) {
+        const button = node.addWidget(
+            "button",
+            "Copy Working Directory",
+            null,
+            () => {
+                copyWorkingDirFromNode(node);
+            }
+        );
+        node.copyWorkingDirButton = button;
+    }
+
+    if (typeof sourceWidget.value === "string" && sourceWidget.value.length > 0) {
+        node.workingDirDisplayWidget.value = sourceWidget.value;
+        const parsedPath = extractWorkingDirPath(sourceWidget.value);
+        if (parsedPath) {
+            node.workingDirRawPath = parsedPath;
+        }
+    } else if (!node.workingDirDisplayWidget.value) {
+        node.workingDirDisplayWidget.value = "Working Dir: (pending workflow execution)";
+    }
+}
+
+function updateWorkingDirWidgetFromExecution(node, message) {
+    const rawValue = message?.working_dir;
+    const workingDir = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+
+    const rawPathValue = message?.working_dir_path;
+    const workingDirPath = Array.isArray(rawPathValue)
+        ? rawPathValue[0]
+        : rawPathValue;
+
+    if (typeof workingDir !== "string" || workingDir.length === 0) {
+        return;
+    }
+
+    if (node.workingDirDisplayWidget) {
+        node.workingDirDisplayWidget.value = workingDir;
+    }
+
+    const sourceWidget = findWorkingDirSourceWidget(node);
+    if (sourceWidget) {
+        sourceWidget.value = workingDir;
+    }
+
+    if (typeof workingDirPath === "string" && workingDirPath.length > 0) {
+        node.workingDirRawPath = workingDirPath;
+    } else {
+        const parsedPath = extractWorkingDirPath(workingDir);
+        if (parsedPath) {
+            node.workingDirRawPath = parsedPath;
+        }
+    }
+}
+
 // ============================================================================
 // Extension registration
 // ============================================================================
@@ -373,6 +574,39 @@ injectStyles();
 app.registerExtension({
     name: "SimpleUtility.StringNodes",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
+
+        // ==================================================================
+        // File I/O string nodes
+        //   Keep "working_dir_display" read-only and auto-refreshed.
+        // ==================================================================
+        if (
+            nodeData.name === "SimpleLoadingStringFromFile"
+            || nodeData.name === "SimpleSavingStringToFile"
+        ) {
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const result = onNodeCreated
+                    ? onNodeCreated.apply(this, [])
+                    : undefined;
+
+                configureWorkingDirDisplayWidget(this, app);
+                return result;
+            };
+
+            const onConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function () {
+                const r = onConfigure?.apply(this, arguments);
+                configureWorkingDirDisplayWidget(this, app);
+                return r;
+            };
+
+            const onExecuted = nodeType.prototype.onExecuted;
+            nodeType.prototype.onExecuted = function (message) {
+                const r = onExecuted?.apply(this, [message]);
+                updateWorkingDirWidgetFromExecution(this, message);
+                return r;
+            };
+        }
 
         // ==================================================================
         // SimpleMarkdownString

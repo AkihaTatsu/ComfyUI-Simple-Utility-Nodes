@@ -13,6 +13,14 @@
         "default_index_selector": "first",
         "default_delimiter_index": 0
     },
+    "SimpleLoadingStringFromFile": {
+        "default_file_path": "input.txt",
+        "default_encoding": "utf-8"
+    },
+    "SimpleSavingStringToFile": {
+        "default_file_path": "output.txt",
+        "default_encoding": "utf-8"
+    },
     "SimpleMarkdownString": {
         "default_text": "# Markdown String\n\nEdit this text. Supports **bold**, *italic*, ~~strikethrough~~.\n\n- Math: $E = mc^2$\n- Emojis: :smile: :rocket:\n- Images: `![alt](url)`\n- Tables, code blocks, and more!"
     },
