@@ -269,7 +269,7 @@ def _patch_execution_validate_inputs() -> bool:
 
         return changes
 
-    async def patched_validate_inputs(prompt_id, prompt, item, validated):
+    async def patched_validate_inputs(prompt_id, prompt, item, validated, *args, **kwargs):
         try:
             _normalize_combo_path_values(prompt, item)
         except Exception as exc:
@@ -279,7 +279,7 @@ def _patch_execution_validate_inputs() -> bool:
                 item,
                 exc,
             )
-        return await original_validate_inputs(prompt_id, prompt, item, validated)
+        return await original_validate_inputs(prompt_id, prompt, item, validated, *args, **kwargs)
 
     patched_validate_inputs._simple_utility_autofix = True
     execution.validate_inputs = patched_validate_inputs
