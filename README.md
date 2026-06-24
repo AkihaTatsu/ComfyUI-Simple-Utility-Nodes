@@ -283,6 +283,35 @@ Display an input string as markdown-rendered rich text or raw text with passthro
 
 </details>
 
+#### ⛏️ Simple Power Prompt
+
+A prompt node (inspired by rgthree's *Power Prompt*) with in-canvas lora and embedding selectors that insert tags into an editable text box. Inline `<lora:name:strength>` tags are parsed and applied to the incoming MODEL/CLIP, and `embedding:name` references are collected and encoded.
+
+<details>
+<summary>Details</summary>
+
+**Inputs:**
+- `model`: The MODEL to apply loras to (required input connection)
+- `clip`: The CLIP to apply loras to and encode embeddings with (required input connection)
+- `text`: The prompt text box. Can be edited by hand, or replaced by an external STRING input (convert widget to input)
+- `lora_name`: A selector that inserts `<lora:name:1.0>` into the text box. Named `lora_name` so it is **compatible with ComfyUI Studio** — when Studio is installed, clicking it opens Studio's lora picker; otherwise it is a normal dropdown
+- `embedding_name`: A selector that inserts `embedding:name` into the text box (a plain dropdown — ComfyUI Studio has no embedding picker)
+
+**Outputs:**
+- `MODEL`: The input model with every parsed `<lora:...>` applied
+- `CLIP`: The input clip with every parsed `<lora:...>` applied
+- `embedding_conditioning`: A CONDITIONING containing only the CLIP-encoded embeddings (the encoding of an empty string when no embeddings are present)
+- `current_text`: The text box content, verbatim (lora tags are kept)
+- `embedding_text`: Only the `embedding:name` references, joined so they can be correctly encoded later by another CLIP text-encode node
+
+**Mechanism:**
+- The lora/embedding selectors are a frontend convenience: each pick inserts a string at the cursor and then resets the selector to its placeholder. The text box itself is fully editable.
+- At run time **only the text-box string is processed** — the selector values are ignored.
+- Syntax: `<lora:name:strength>` (e.g. `<lora:detail:0.8>`; strength defaults to `1.0`, `0` is skipped, unresolved names are skipped) and `embedding:name`.
+- When `text` is driven by an external input, the selectors become a harmless no-op (there is no text box to insert into).
+
+</details>
+
 ### Switch-Related Nodes
 
 #### ⛏️ Simple Switch with Random Mode

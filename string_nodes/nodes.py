@@ -7,13 +7,20 @@ from typing import Tuple
 
 from .utils import (
     append_string,
+    extract_embedding_text,
     get_working_dir_display,
     get_working_dir_path,
     load_string_from_file,
+    parse_loras_from_text,
     save_string_to_file,
     sever_string,
     wrap_string,
 )
+
+# First combo entry is a non-model placeholder so the default never auto-inserts
+# anything. The frontend resets the selector back to it after every pick.
+LORA_PLACEHOLDER = "🔽 select lora to insert"
+EMBEDDING_PLACEHOLDER = "🔽 select embedding to insert"
 
 # Load settings
 _SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "settings.json")
@@ -382,6 +389,85 @@ class SimpleMarkdownStringDisplay:
         }
 
 
+class SimplePowerPrompt:
+    """A prompt node with in-canvas lora and embedding selectors.
+
+    Inline ``<lora:name:strength>`` tags in the text box are parsed and
+    applied to the incoming MODEL/CLIP. The lora and embedding selectors are
+    a frontend convenience: picking one inserts its tag into the (editable)
+    text box. At run time only the text-box string is processed.
+
+    The lora selector is named ``lora_name`` so ComfyUI Studio intercepts it
+    with its model picker; the embedding selector is a plain dropdown
+    (Studio has no embedding picker).
+
+    Outputs:
+        MODEL / CLIP            -- with every parsed lora applied.
+        embedding_conditioning  -- CLIP-encoded embeddings (encode("") if none).
+        current_text            -- the text box, verbatim.
+        embedding_text          -- only the embedding references, for later encoding.
+    """
+
+    CATEGORY = "Simple Utility ⛏️/String"
+    FUNCTION = "execute"
+    RETURN_TYPES = ("MODEL", "CLIP", "CONDITIONING", "STRING", "STRING")
+    RETURN_NAMES = (
+        "MODEL",
+        "CLIP",
+        "embedding_conditioning",
+        "current_text",
+        "embedding_text",
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        import folder_paths
+
+        settings = SETTINGS["SimplePowerPrompt"]
+        lora_list = [LORA_PLACEHOLDER] + folder_paths.get_filename_list("loras")
+        embedding_list = (
+            [EMBEDDING_PLACEHOLDER] + folder_paths.get_filename_list("embeddings")
+        )
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "clip": ("CLIP",),
+                "text": ("STRING", {
+                    "default": settings["default_text"],
+                    "multiline": True,
+                    "dynamicPrompts": True
+                }),
+            },
+            "optional": {
+                # MUST be named exactly "lora_name" for ComfyUI Studio compatibility.
+                "lora_name": (lora_list,),
+                "embedding_name": (embedding_list,),
+            },
+        }
+
+    def execute(
+        self,
+        model,
+        clip,
+        text: str,
+        lora_name: str = None,
+        embedding_name: str = None,
+    ):
+        """Apply loras from the text, encode embeddings, and pass text through."""
+        from nodes import CLIPTextEncode, LoraLoader
+
+        for lora in parse_loras_from_text(text):
+            model, clip = LoraLoader().load_lora(
+                model, clip, lora["lora"], lora["strength"], lora["strength"]
+            )
+
+        embedding_text = extract_embedding_text(text)
+        # encode("") yields a valid "empty" conditioning when no embeddings exist.
+        conditioning = CLIPTextEncode().encode(clip, embedding_text)[0]
+
+        return (model, clip, conditioning, text, embedding_text)
+
+
 # Node class mappings
 NODE_CLASS_MAPPINGS = {
     "SimpleStringAppending": SimpleStringAppending,
@@ -391,6 +477,7 @@ NODE_CLASS_MAPPINGS = {
     "SimpleSavingStringToFile": SimpleSavingStringToFile,
     "SimpleMarkdownString": SimpleMarkdownString,
     "SimpleMarkdownStringDisplay": SimpleMarkdownStringDisplay,
+    "SimplePowerPrompt": SimplePowerPrompt,
 }
 
 # Display name mappings
@@ -402,4 +489,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SimpleSavingStringToFile": "⛏️ Simple Saving String to File",
     "SimpleMarkdownString": "⛏️ Simple Markdown String",
     "SimpleMarkdownStringDisplay": "⛏️ Simple Markdown String Display",
+    "SimplePowerPrompt": "⛏️ Simple Power Prompt",
 }

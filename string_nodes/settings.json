@@ -26,5 +26,8 @@
     },
     "SimpleMarkdownStringDisplay": {
         "default_display_mode": false
+    },
+    "SimplePowerPrompt": {
+        "default_text": ""
     }
 }
