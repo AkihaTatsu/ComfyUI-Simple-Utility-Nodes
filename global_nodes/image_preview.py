@@ -44,6 +44,51 @@ _latest_preview_blob: bytes | None = None
 _latest_preview_lock = threading.Lock()
 _latest_preview_counter: int = 0  # bumped each time a new blob arrives
 
+_MEDIA_KIND_KEY = "_simple_media_kind"
+_VIDEO_EXTENSIONS = {
+    ".mp4",
+    ".webm",
+    ".mov",
+    ".m4v",
+    ".mkv",
+    ".avi",
+    ".ogv",
+    ".ogg",
+}
+
+
+def _is_truthy_animated(value) -> bool:
+    if isinstance(value, (list, tuple)):
+        return any(bool(v) for v in value)
+    return bool(value)
+
+
+def _guess_media_kind(info: dict, animated: bool = False) -> str:
+    fmt = str(info.get("format") or info.get("mime_type") or "").lower()
+    filename = str(info.get("filename") or "").lower()
+    ext = os.path.splitext(filename)[1]
+    if fmt.startswith("video/") or ext in _VIDEO_EXTENSIONS or animated:
+        return "video"
+    return "image"
+
+
+def _annotate_media_items(images: List[Dict[str, str]], output: dict) -> List[Dict[str, str]]:
+    """Return copies of executed image metadata with this extension's media hint.
+
+    ComfyUI's core Save Video node emits PreviewVideo as an ``images`` list plus
+    ``animated=(True,)``.  We keep the original event untouched and annotate only
+    the data stored for this extension's standalone viewer.
+    """
+    animated = _is_truthy_animated(output.get("animated"))
+    annotated = []
+    for info in images:
+        if not isinstance(info, dict):
+            continue
+        item = dict(info)
+        item[_MEDIA_KIND_KEY] = _guess_media_kind(item, animated)
+        annotated.append(item)
+    return annotated
+
 
 def _set_latest_images(images: List[Dict[str, str]]) -> None:
     global _latest_images_counter
@@ -233,7 +278,7 @@ def _install_server_hook() -> None:
                 if output and isinstance(output, dict):
                     images = output.get("images")
                     if images and isinstance(images, list) and len(images) > 0:
-                        _set_latest_images(images)
+                        _set_latest_images(_annotate_media_items(images, output))
 
             # Track which node is currently executing
             if event == "executing" and isinstance(data, dict):

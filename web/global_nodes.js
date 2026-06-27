@@ -45,14 +45,36 @@ app.registerExtension({
         if (nodeData.name === "SimpleGlobalImagePreview") {
 
             // Shared state across all instances of this node type.
-            // Every instance shows the same latest image.
+            // Every instance shows the same latest media.
             const shared = {
-                imgEl: null,           // HTMLImageElement currently loaded
+                mediaEl: null,         // HTMLImageElement or HTMLVideoElement currently loaded
+                mediaKind: "image",    // "image" | "video"
                 blobUrl: null,         // Object-URL for KSampler step previews
                 sourceLabel: "",       // human-readable label shown under the image
                 lastKey: null,         // dedup key for executed-event images
                 listeners: new Set(),  // all node instances to repaint on update
+                rafId: null,           // redraw loop while a video is playing
             };
+
+            const MEDIA_KIND_KEY = "_simple_media_kind";
+            const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "m4v", "mkv", "avi", "ogv", "ogg"]);
+
+            function animatedIsTruthy(value) {
+                if (Array.isArray(value)) return value.some(Boolean);
+                return !!value;
+            }
+
+            function mediaKindForInfo(info, output = null) {
+                const explicit = info?.[MEDIA_KIND_KEY];
+                if (explicit === "video" || explicit === "image") return explicit;
+                const fmt = String(info?.format || info?.mime_type || "").toLowerCase();
+                const filename = String(info?.filename || "");
+                const ext = filename.includes(".") ? filename.split(".").pop().toLowerCase() : "";
+                if (fmt.startsWith("video/") || VIDEO_EXTENSIONS.has(ext) || animatedIsTruthy(output?.animated)) {
+                    return "video";
+                }
+                return "image";
+            }
 
             /** Notify every instance to redraw */
             function repaintAll() {
@@ -61,11 +83,47 @@ app.registerExtension({
                 }
             }
 
+            function stopVideoRedraw() {
+                if (shared.rafId) {
+                    cancelAnimationFrame(shared.rafId);
+                    shared.rafId = null;
+                }
+            }
+
+            function startVideoRedraw(video) {
+                stopVideoRedraw();
+                const tick = () => {
+                    if (shared.mediaEl !== video || shared.mediaKind !== "video") {
+                        shared.rafId = null;
+                        return;
+                    }
+                    repaintAll();
+                    shared.rafId = requestAnimationFrame(tick);
+                };
+                shared.rafId = requestAnimationFrame(tick);
+            }
+
+            function clearMedia() {
+                stopVideoRedraw();
+                if (shared.mediaKind === "video" && shared.mediaEl) {
+                    try { shared.mediaEl.pause(); } catch (_) {}
+                }
+                shared.mediaEl = null;
+                shared.mediaKind = "image";
+            }
+
+            function revokePreviewBlob() {
+                if (shared.blobUrl) {
+                    URL.revokeObjectURL(shared.blobUrl);
+                    shared.blobUrl = null;
+                }
+            }
+
             /**
-             * Show an image from an ``executed`` event.
+             * Show an image or video from an ``executed`` event.
              * @param {{filename:string, subfolder:string, type:string}} info
              */
-            function showExecutedImage(info) {
+            function showExecutedMedia(info, output = null) {
                 const key = `${info.type}/${info.subfolder || ""}/${info.filename}`;
                 if (key === shared.lastKey) return; // no change
                 shared.lastKey = key;
@@ -77,11 +135,38 @@ app.registerExtension({
                     + `&t=${Date.now()}`
                 );
 
+                const mediaKind = mediaKindForInfo(info, output);
+                if (mediaKind === "video") {
+                    const video = document.createElement("video");
+                    video.autoplay = true;
+                    video.muted = true;
+                    video.loop = true;
+                    video.playsInline = true;
+                    video.controls = false;
+                    video.preload = "auto";
+                    video.onloadedmetadata = () => {
+                        revokePreviewBlob();
+                        clearMedia();
+                        shared.mediaEl = video;
+                        shared.mediaKind = "video";
+                        shared.sourceLabel = `${info.filename}  (${video.videoWidth}×${video.videoHeight})`;
+                        repaintAll();
+                        startVideoRedraw(video);
+                        video.play().catch(() => {});
+                    };
+                    video.onerror = () => {
+                        console.warn("Global Image Preview video load failed:", url);
+                    };
+                    video.src = url;
+                    return;
+                }
+
                 const img = new Image();
                 img.onload = () => {
-                    // Revoke previous blob URL if any
-                    if (shared.blobUrl) { URL.revokeObjectURL(shared.blobUrl); shared.blobUrl = null; }
-                    shared.imgEl = img;
+                    revokePreviewBlob();
+                    clearMedia();
+                    shared.mediaEl = img;
+                    shared.mediaKind = "image";
                     shared.sourceLabel = `${info.filename}  (${img.naturalWidth}×${img.naturalHeight})`;
                     repaintAll();
                 };
@@ -93,13 +178,15 @@ app.registerExtension({
              * @param {Blob} blob
              */
             function showPreviewBlob(blob) {
-                if (shared.blobUrl) URL.revokeObjectURL(shared.blobUrl);
+                revokePreviewBlob();
                 shared.blobUrl = URL.createObjectURL(blob);
                 shared.lastKey = null; // allow next executed-event to overwrite
 
                 const img = new Image();
                 img.onload = () => {
-                    shared.imgEl = img;
+                    clearMedia();
+                    shared.mediaEl = img;
+                    shared.mediaKind = "image";
                     shared.sourceLabel = "KSampler step preview";
                     repaintAll();
                 };
@@ -121,7 +208,7 @@ app.registerExtension({
                     const output = detail.output ?? detail;
                     if (output && output.images && output.images.length > 0) {
                         const latest = output.images[output.images.length - 1];
-                        showExecutedImage(latest);
+                        showExecutedMedia(latest, output);
                     }
                 });
 
@@ -175,8 +262,12 @@ app.registerExtension({
             nodeType.prototype.onDrawForeground = function (ctx) {
                 if (onDrawForeground) onDrawForeground.apply(this, arguments);
 
-                const img = shared.imgEl;
-                if (!img || !img.complete || !img.naturalWidth) {
+                const media = shared.mediaEl;
+                const isVideo = shared.mediaKind === "video";
+                const mediaW = isVideo ? (media?.videoWidth || 0) : (media?.naturalWidth || 0);
+                const mediaH = isVideo ? (media?.videoHeight || 0) : (media?.naturalHeight || 0);
+                const ready = isVideo ? (media?.readyState >= 2 && mediaW > 0) : (media?.complete && mediaW > 0);
+                if (!media || !ready) {
                     // Placeholder
                     ctx.save();
                     ctx.fillStyle = "#556";
@@ -195,8 +286,8 @@ app.registerExtension({
                 const aH = this.size[1] - widgetH - pad;
                 if (aW <= 0 || aH <= 0) return;
 
-                const iW = img.naturalWidth;
-                const iH = img.naturalHeight;
+                const iW = mediaW;
+                const iH = mediaH;
                 const scale = Math.min(aW / iW, aH / iH, 1);
                 const dw = iW * scale;
                 const dh = iH * scale;
@@ -206,7 +297,7 @@ app.registerExtension({
                 ctx.save();
                 ctx.fillStyle = "#222";
                 ctx.fillRect(dx, dy, dw, dh);
-                ctx.drawImage(img, dx, dy, dw, dh);
+                ctx.drawImage(media, dx, dy, dw, dh);
                 ctx.restore();
             };
 
@@ -214,6 +305,9 @@ app.registerExtension({
             const onRemoved = nodeType.prototype.onRemoved;
             nodeType.prototype.onRemoved = function () {
                 shared.listeners.delete(this);
+                if (shared.listeners.size === 0) {
+                    clearMedia();
+                }
                 if (onRemoved) onRemoved.apply(this, arguments);
             };
 

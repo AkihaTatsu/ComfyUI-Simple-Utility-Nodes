@@ -236,29 +236,39 @@ select { font-family: inherit; }
     height: 100%;
 }
 
-#previewImage {
+#previewImage,
+#previewVideo {
     image-rendering: auto;
     display: none;
 }
 
-#previewImage.fit-contain {
+#previewVideo {
+    background: #000;
+}
+
+#previewImage.fit-contain,
+#previewVideo.fit-contain {
     max-width: 100%; max-height: 100%;
     width: auto; height: auto;
     object-fit: contain;
 }
-#previewImage.fit-fill {
+#previewImage.fit-fill,
+#previewVideo.fit-fill {
     width: 100%; height: 100%;
     max-width: none; max-height: none;
     object-fit: contain;
 }
-#previewImage.fit-actual {
+#previewImage.fit-actual,
+#previewVideo.fit-actual {
     max-width: none; max-height: none;
     width: auto; height: auto;
     object-fit: none;
     cursor: grab;
 }
-#previewImage.dragging { cursor: grabbing; }
-#previewImage.pannable { cursor: grab; }
+#previewImage.dragging,
+#previewVideo.dragging { cursor: grabbing; }
+#previewImage.pannable,
+#previewVideo.pannable { cursor: grab; }
 
 .placeholder {
     display: flex; flex-direction: column;
@@ -318,9 +328,11 @@ select { font-family: inherit; }
     margin-bottom: 4px;
 }
 .history-item:hover { border-color: rgba(255,255,255,0.15); }
-.history-item img {
+.history-item img,
+.history-item video {
     width: 100%; height: auto;
     border-radius: 3px; display: block;
+    background: #000;
 }
 
 /* ================================================================
@@ -366,14 +378,21 @@ select { font-family: inherit; }
     max-height: 92vh;
     cursor: default;
 }
-.lightbox-inner img {
+.lightbox-inner img,
+.lightbox-inner video {
     max-width: 92vw;
     max-height: 86vh;
     object-fit: contain;
     border-radius: 6px;
-    display: block;
-    cursor: pointer;
+    display: none;
     box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+    background: #000;
+}
+.lightbox-inner img {
+    cursor: pointer;
+}
+.lightbox-inner video {
+    cursor: pointer;
 }
 .lightbox-close {
     position: fixed;
@@ -530,6 +549,7 @@ select { font-family: inherit; }
                 <p class="sub">Run a workflow with preview / save image nodes</p>
             </div>
             <img id="previewImage" alt="Preview"/>
+            <video id="previewVideo" muted loop playsinline preload="auto"></video>
         </div>
     </div>
 
@@ -553,6 +573,7 @@ select { font-family: inherit; }
     <div class="lightbox-inner" id="lightboxInner">
         <button class="lightbox-close" id="lightboxClose">✕</button>
         <img id="lightboxImg" alt="Full preview"/>
+        <video id="lightboxVideo" controls loop playsinline preload="metadata"></video>
         <div class="lightbox-info" id="lightboxInfo"></div>
     </div>
 </div>
@@ -564,6 +585,7 @@ select { font-family: inherit; }
 
 /* ── DOM ── */
 const $img           = document.getElementById('previewImage');
+const $video         = document.getElementById('previewVideo');
 const $placeholder   = document.getElementById('placeholder');
 const $fitMode       = document.getElementById('fitMode');
 const $historyBtn    = document.getElementById('historyBtn');
@@ -584,6 +606,7 @@ const $hdrControls   = document.getElementById('hdrControls');
 const $viewerPane    = document.getElementById('viewerPane');
 const $lightbox      = document.getElementById('lightbox');
 const $lightboxImg   = document.getElementById('lightboxImg');
+const $lightboxVideo = document.getElementById('lightboxVideo');
 const $lightboxClose = document.getElementById('lightboxClose');
 const $lightboxInfo  = document.getElementById('lightboxInfo');
 const $browserBtn    = document.getElementById('browserBtn');
@@ -596,8 +619,12 @@ let currentBlobUrl = null;
 let lastImagesCounter = -1;
 let lastPreviewCounter = -1;
 let isPolling = true;
+let currentMediaKind = 'image';
+let displayToken = 0;
 
 const HISTORY_CLEAR_COUNTER_KEY = 'simpleutility.globalpreview.historyClearCounter';
+const MEDIA_KIND_KEY = '_simple_media_kind';
+const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'ogv', 'ogg']);
 
 /* Legacy localStorage value is no longer used — history is now stored
    server-side for the entire ComfyUI session.  Clean it up silently. */
@@ -635,20 +662,92 @@ function viewUrl(info) {
 }
 function fullUrl(info) { return viewUrl(info) + '&t=' + Date.now(); }
 
-/* ── IMAGE DISPLAY ── */
-function showImageFromUrl(url, label) {
-    $img.onload = () => {
+function mediaKindForInfo(info) {
+    const explicit = info?.[MEDIA_KIND_KEY];
+    if (explicit === 'video' || explicit === 'image') return explicit;
+    const fmt = String(info?.format || info?.mime_type || '').toLowerCase();
+    const filename = String(info?.filename || '');
+    const ext = filename.includes('.') ? filename.split('.').pop().toLowerCase() : '';
+    return (fmt.startsWith('video/') || VIDEO_EXTENSIONS.has(ext)) ? 'video' : 'image';
+}
+
+function currentMediaEl() {
+    return currentMediaKind === 'video' ? $video : $img;
+}
+
+function resetMediaTransform(el) {
+    el.classList.remove('fit-contain', 'fit-fill', 'fit-actual', 'pannable', 'dragging');
+    el.style.transform = '';
+    el.style.transformOrigin = '';
+}
+
+function showActiveMedia(kind) {
+    currentMediaKind = kind;
+    resetMediaTransform($img);
+    resetMediaTransform($video);
+    if (kind === 'video') {
+        $img.style.display = 'none';
+        $img.removeAttribute('src');
+        $video.style.display = 'block';
+    } else {
+        $video.pause();
+        $video.removeAttribute('src');
+        $video.load();
+        $video.style.display = 'none';
         $img.style.display = 'block';
-        $placeholder.style.display = 'none';
+    }
+    $placeholder.style.display = 'none';
+}
+
+function mediaLabel(info) {
+    return `${info.filename}  (${info.type})`;
+}
+
+/* ── MEDIA DISPLAY ── */
+function showImageFromUrl(url, label) {
+    const token = ++displayToken;
+    $img.onload = () => {
+        if (token !== displayToken) return;
+        showActiveMedia('image');
         $infoLeft.textContent = label;
         $infoRight.textContent = 'Updated: ' + new Date().toLocaleTimeString();
         applyFit();
     };
     $img.onerror = () => {
+        if (token !== displayToken) return;
         console.warn('Image load failed:', url);
         $infoRight.textContent = 'Image load error — retrying…';
     };
     $img.src = url;
+}
+
+function showVideoFromUrl(url, label) {
+    const token = ++displayToken;
+    $video.onloadedmetadata = () => {
+        if (token !== displayToken) return;
+        showActiveMedia('video');
+        $infoLeft.textContent = label;
+        $infoRight.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+        applyFit();
+        $video.play().catch(() => {});
+    };
+    $video.onerror = () => {
+        if (token !== displayToken) return;
+        console.warn('Video load failed:', url);
+        $infoRight.textContent = 'Video load error — retrying…';
+    };
+    $video.autoplay = true;
+    $video.muted = true;
+    $video.loop = true;
+    $video.controls = false;
+    $video.playsInline = true;
+    $video.src = url;
+    $video.load();
+}
+
+function showMediaFromUrl(info, url, label) {
+    if (mediaKindForInfo(info) === 'video') showVideoFromUrl(url, label);
+    else showImageFromUrl(url, label);
 }
 
 function showExecutedImage(info) {
@@ -656,7 +755,7 @@ function showExecutedImage(info) {
     if (key === lastKey) return;
     lastKey = key;
     const url = fullUrl(info);
-    showImageFromUrl(url, `${info.filename}  (${info.type})`);
+    showMediaFromUrl(info, url, mediaLabel(info));
     addToHistory(info, url);
 }
 
@@ -664,6 +763,7 @@ function showPreviewBlob(blob) {
     if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
     currentBlobUrl = URL.createObjectURL(blob);
     lastKey = null;
+    currentMediaKind = 'image';
     showImageFromUrl(currentBlobUrl, 'KSampler step preview');
 }
 
@@ -674,10 +774,11 @@ let panY = 0;
 const MIN_SCALE = 0.5, MAX_SCALE = 5;
 
 function clampPan() {
+    const media = currentMediaEl();
     const vw = $viewerPane.clientWidth;
     const vh = $viewerPane.clientHeight;
-    const iw = $img.offsetWidth;
-    const ih = $img.offsetHeight;
+    const iw = media.offsetWidth;
+    const ih = media.offsetHeight;
     const maxPX = Math.max(0, (iw * currentScale - vw) / 2);
     const maxPY = Math.max(0, (ih * currentScale - vh) / 2);
     panX = Math.min(maxPX, Math.max(-maxPX, panX));
@@ -685,25 +786,26 @@ function clampPan() {
 }
 
 function applyScaledTransform() {
+    const media = currentMediaEl();
     clampPan();
-    $img.style.transform = `translate(${panX}px, ${panY}px) scale(${currentScale})`;
-    $img.style.transformOrigin = 'center center';
-    $img.classList.toggle('pannable', currentScale > 1 && !$img.classList.contains('fit-actual'));
+    media.style.transform = `translate(${panX}px, ${panY}px) scale(${currentScale})`;
+    media.style.transformOrigin = 'center center';
+    media.classList.toggle('pannable', currentScale > 1 && !media.classList.contains('fit-actual'));
 }
 
 function applyFit() {
     const mode = $fitMode.value;
-    $img.classList.remove('fit-contain', 'fit-fill', 'fit-actual', 'pannable');
+    const media = currentMediaEl();
+    resetMediaTransform($img);
+    resetMediaTransform($video);
     $viewerPane.classList.remove('scrollable');
-    $img.style.transform = '';
-    $img.style.transformOrigin = '';
     currentScale = 1;
     panX = 0;
     panY = 0;
 
-    if (mode === 'fill')        $img.classList.add('fit-fill');
-    else if (mode === 'actual') { $img.classList.add('fit-actual'); $viewerPane.classList.add('scrollable'); }
-    else                        $img.classList.add('fit-contain');
+    if (mode === 'fill')        media.classList.add('fit-fill');
+    else if (mode === 'actual') { media.classList.add('fit-actual'); $viewerPane.classList.add('scrollable'); }
+    else                        media.classList.add('fit-contain');
 }
 
 $fitMode.addEventListener('change', () => {
@@ -728,10 +830,20 @@ function renderHistory() {
         const item = historyItems[i];
         const div = document.createElement('div');
         div.className = 'history-item';
-        const thumb = document.createElement('img');
+        const isVideo = mediaKindForInfo(item.info) === 'video';
+        const thumb = document.createElement(isVideo ? 'video' : 'img');
         thumb.src = item.cachedUrl;
-        thumb.loading = 'lazy';
-        thumb.alt = item.info.filename;
+        if (isVideo) {
+            thumb.muted = true;
+            thumb.loop = true;
+            thumb.playsInline = true;
+            thumb.preload = 'metadata';
+            thumb.addEventListener('mouseenter', () => thumb.play().catch(() => {}));
+            thumb.addEventListener('mouseleave', () => thumb.pause());
+        } else {
+            thumb.loading = 'lazy';
+            thumb.alt = item.info.filename;
+        }
         div.appendChild(thumb);
         div.addEventListener('click', () => openLightbox(item));
         $historyList.appendChild(div);
@@ -763,7 +875,24 @@ let lightboxItem = null;
 
 function openLightbox(item) {
     lightboxItem = item;
-    $lightboxImg.src = item.cachedUrl;
+    const isVideo = mediaKindForInfo(item.info) === 'video';
+    $lightboxImg.style.display = isVideo ? 'none' : 'block';
+    $lightboxVideo.style.display = isVideo ? 'block' : 'none';
+    if (isVideo) {
+        $lightboxImg.removeAttribute('src');
+        $lightboxVideo.onloadedmetadata = () => {
+            try { $lightboxVideo.currentTime = 0; } catch (_) {}
+            $lightboxVideo.play().catch(() => {});
+        };
+        $lightboxVideo.src = item.cachedUrl;
+        $lightboxVideo.load();
+    } else {
+        $lightboxVideo.onloadedmetadata = null;
+        $lightboxVideo.pause();
+        $lightboxVideo.removeAttribute('src');
+        $lightboxVideo.load();
+        $lightboxImg.src = item.cachedUrl;
+    }
     $lightboxInfo.textContent = `${item.info.filename}  (${item.info.type})`;
     $lightbox.classList.add('open');
     /* Push a history entry so the mobile back button / gesture closes the lightbox */
@@ -772,6 +901,11 @@ function openLightbox(item) {
 
 function closeLightbox() {
     $lightbox.classList.remove('open');
+    $lightboxVideo.onloadedmetadata = null;
+    $lightboxVideo.pause();
+    $lightboxVideo.removeAttribute('src');
+    $lightboxVideo.load();
+    $lightboxImg.removeAttribute('src');
     lightboxItem = null;
 }
 
@@ -780,6 +914,11 @@ $lightbox.addEventListener('click', (e) => { if (e.target === $lightbox) closeLi
 $lightboxImg.addEventListener('click', (e) => {
     e.stopPropagation();
     if (lightboxItem) window.open(fullUrl(lightboxItem.info), '_blank');
+});
+$lightboxVideo.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if ($lightboxVideo.paused) $lightboxVideo.play().catch(() => {});
+    else $lightboxVideo.pause();
 });
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $lightbox.classList.contains('open')) closeLightbox();
@@ -805,22 +944,26 @@ document.addEventListener('click', (e) => {
 /* ── DRAG-TO-PAN (mouse) — Actual Size scroll + Contain/Fill zoom-pan ── */
 let isDragging = false, dragSX, dragSY, scL, scT;
 let isMousePan = false, mousePanSX, mousePanSY, mousePanBX, mousePanBY;
+let activeDragEl = null;
 
-$img.addEventListener('mousedown', (e) => {
-    if ($img.classList.contains('fit-actual')) {
-        isDragging = true; $img.classList.add('dragging');
-        dragSX = e.clientX; dragSY = e.clientY;
-        scL = $viewerPane.scrollLeft; scT = $viewerPane.scrollTop;
-        e.preventDefault();
-        return;
-    }
-    if (currentScale > 1) {
-        isMousePan = true; $img.classList.add('dragging');
-        mousePanSX = e.clientX; mousePanSY = e.clientY;
-        mousePanBX = panX; mousePanBY = panY;
-        e.preventDefault();
-    }
-});
+for (const mediaEl of [$img, $video]) {
+    mediaEl.addEventListener('mousedown', (e) => {
+        if (mediaEl !== currentMediaEl()) return;
+        if (mediaEl.classList.contains('fit-actual')) {
+            isDragging = true; activeDragEl = mediaEl; mediaEl.classList.add('dragging');
+            dragSX = e.clientX; dragSY = e.clientY;
+            scL = $viewerPane.scrollLeft; scT = $viewerPane.scrollTop;
+            e.preventDefault();
+            return;
+        }
+        if (currentScale > 1) {
+            isMousePan = true; activeDragEl = mediaEl; mediaEl.classList.add('dragging');
+            mousePanSX = e.clientX; mousePanSY = e.clientY;
+            mousePanBX = panX; mousePanBY = panY;
+            e.preventDefault();
+        }
+    });
+}
 document.addEventListener('mousemove', (e) => {
     if (isDragging) {
         $viewerPane.scrollLeft = scL - (e.clientX - dragSX);
@@ -835,13 +978,15 @@ document.addEventListener('mousemove', (e) => {
 });
 document.addEventListener('mouseup', () => {
     isDragging = false; isMousePan = false;
-    $img.classList.remove('dragging');
+    if (activeDragEl) activeDragEl.classList.remove('dragging');
+    activeDragEl = null;
 });
 
 /* ── MOUSE WHEEL ZOOM (PC — zoom towards cursor) ── */
 $viewerPane.addEventListener('wheel', (e) => {
-    if ($img.classList.contains('fit-actual')) return;
-    if ($img.style.display === 'none') return;
+    const media = currentMediaEl();
+    if (media.classList.contains('fit-actual')) return;
+    if (media.style.display === 'none') return;
     e.preventDefault();
     const oldScale = currentScale;
     const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
@@ -859,13 +1004,16 @@ $viewerPane.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 /* ── DOUBLE-CLICK RESET ZOOM (PC) ── */
-$img.addEventListener('dblclick', (e) => {
-    if ($img.classList.contains('fit-actual')) return;
-    currentScale = 1; panX = 0; panY = 0;
-    $img.style.transform = '';
-    $img.style.transformOrigin = '';
-    $img.classList.remove('pannable');
-});
+for (const mediaEl of [$img, $video]) {
+    mediaEl.addEventListener('dblclick', (e) => {
+        if (mediaEl !== currentMediaEl()) return;
+        if (mediaEl.classList.contains('fit-actual')) return;
+        currentScale = 1; panX = 0; panY = 0;
+        mediaEl.style.transform = '';
+        mediaEl.style.transformOrigin = '';
+        mediaEl.classList.remove('pannable');
+    });
+}
 
 let isTouchDrag = false;
 let isTouchPan = false;
@@ -873,32 +1021,37 @@ let panStartX = 0;
 let panStartY = 0;
 let panBaseX = 0;
 let panBaseY = 0;
-$img.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) return;
+for (const mediaEl of [$img, $video]) {
+    mediaEl.addEventListener('touchstart', (e) => {
+        if (mediaEl !== currentMediaEl()) return;
+        if (e.touches.length !== 1) return;
 
-    if ($img.classList.contains('fit-actual')) {
-        isTouchDrag = true;
-        isTouchPan = false;
-        $img.classList.add('dragging');
-        dragSX = e.touches[0].clientX;
-        dragSY = e.touches[0].clientY;
-        scL = $viewerPane.scrollLeft;
-        scT = $viewerPane.scrollTop;
-        e.preventDefault();
-        return;
-    }
+        if (mediaEl.classList.contains('fit-actual')) {
+            isTouchDrag = true;
+            isTouchPan = false;
+            activeDragEl = mediaEl;
+            mediaEl.classList.add('dragging');
+            dragSX = e.touches[0].clientX;
+            dragSY = e.touches[0].clientY;
+            scL = $viewerPane.scrollLeft;
+            scT = $viewerPane.scrollTop;
+            e.preventDefault();
+            return;
+        }
 
-    if (currentScale > 1) {
-        isTouchPan = true;
-        isTouchDrag = false;
-        $img.classList.add('dragging');
-        panStartX = e.touches[0].clientX;
-        panStartY = e.touches[0].clientY;
-        panBaseX = panX;
-        panBaseY = panY;
-        e.preventDefault();
-    }
-}, { passive: false });
+        if (currentScale > 1) {
+            isTouchPan = true;
+            isTouchDrag = false;
+            activeDragEl = mediaEl;
+            mediaEl.classList.add('dragging');
+            panStartX = e.touches[0].clientX;
+            panStartY = e.touches[0].clientY;
+            panBaseX = panX;
+            panBaseY = panY;
+            e.preventDefault();
+        }
+    }, { passive: false });
+}
 document.addEventListener('touchmove', (e) => {
     if (isTouchDrag && e.touches.length === 1) {
         $viewerPane.scrollLeft = scL - (e.touches[0].clientX - dragSX);
@@ -917,7 +1070,8 @@ document.addEventListener('touchmove', (e) => {
 document.addEventListener('touchend', () => {
     isTouchDrag = false;
     isTouchPan = false;
-    $img.classList.remove('dragging');
+    if (activeDragEl) activeDragEl.classList.remove('dragging');
+    activeDragEl = null;
 });
 
 /* ── PINCH-TO-ZOOM + double-tap ── */
@@ -928,46 +1082,53 @@ function pinchDist(t) {
     return Math.sqrt(dx * dx + dy * dy);
 }
 
-$img.addEventListener('touchstart', (e) => {
-    if ($img.classList.contains('fit-actual')) return;
-    if (e.touches.length === 2) {
-        isTouchPan = false;
-        isTouchDrag = false;
-        lastPinchDist = pinchDist(e.touches);
-        e.preventDefault();
-    }
-}, { passive: false });
-$img.addEventListener('touchmove', (e) => {
-    if ($img.classList.contains('fit-actual') || e.touches.length !== 2) return;
-    const d = pinchDist(e.touches);
-    if (lastPinchDist > 0) {
-        currentScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, currentScale * (d / lastPinchDist)));
-        if (currentScale <= 1) {
+for (const mediaEl of [$img, $video]) {
+    mediaEl.addEventListener('touchstart', (e) => {
+        if (mediaEl !== currentMediaEl()) return;
+        if (mediaEl.classList.contains('fit-actual')) return;
+        if (e.touches.length === 2) {
+            isTouchPan = false;
+            isTouchDrag = false;
+            lastPinchDist = pinchDist(e.touches);
+            e.preventDefault();
+        }
+    }, { passive: false });
+    mediaEl.addEventListener('touchmove', (e) => {
+        if (mediaEl !== currentMediaEl()) return;
+        if (mediaEl.classList.contains('fit-actual') || e.touches.length !== 2) return;
+        const d = pinchDist(e.touches);
+        if (lastPinchDist > 0) {
+            currentScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, currentScale * (d / lastPinchDist)));
+            if (currentScale <= 1) {
+                currentScale = 1;
+                panX = 0;
+                panY = 0;
+            }
+            applyScaledTransform();
+        }
+        lastPinchDist = d; e.preventDefault();
+    }, { passive: false });
+    mediaEl.addEventListener('touchend', (e) => { if (e.touches.length < 2) lastPinchDist = 0; });
+}
+
+let lastTapTime = 0;
+for (const mediaEl of [$img, $video]) {
+    mediaEl.addEventListener('touchend', (e) => {
+        if (mediaEl !== currentMediaEl()) return;
+        if (e.touches.length > 0) return;
+        const now = Date.now();
+        if (now - lastTapTime < 300) {
             currentScale = 1;
             panX = 0;
             panY = 0;
+            mediaEl.style.transform = '';
+            mediaEl.style.transformOrigin = '';
+            mediaEl.classList.remove('pannable');
+            e.preventDefault();
         }
-        applyScaledTransform();
-    }
-    lastPinchDist = d; e.preventDefault();
-}, { passive: false });
-$img.addEventListener('touchend', (e) => { if (e.touches.length < 2) lastPinchDist = 0; });
-
-let lastTapTime = 0;
-$img.addEventListener('touchend', (e) => {
-    if (e.touches.length > 0) return;
-    const now = Date.now();
-    if (now - lastTapTime < 300) {
-        currentScale = 1;
-        panX = 0;
-        panY = 0;
-        $img.style.transform = '';
-        $img.style.transformOrigin = '';
-        $img.classList.remove('pannable');
-        e.preventDefault();
-    }
-    lastTapTime = now;
-});
+        lastTapTime = now;
+    });
+}
 
 /* ── WORKFLOW STATUS ── */
 function updateWorkflowStatus(status) {
@@ -1107,7 +1268,7 @@ async function pollLoop() {
                             const key = `${info.type}/${info.subfolder || ''}/${info.filename}`;
                             if (key !== lastKey) {
                                 lastKey = key;
-                                showImageFromUrl(fullUrl(info), `${info.filename}  (${info.type})`);
+                                showMediaFromUrl(info, fullUrl(info), mediaLabel(info));
                             }
                         }
                     }
@@ -1157,4 +1318,3 @@ pollLoop();
 </script>
 </body>
 </html>
-
