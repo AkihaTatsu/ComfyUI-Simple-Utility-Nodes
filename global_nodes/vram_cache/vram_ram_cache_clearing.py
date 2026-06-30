@@ -13,7 +13,9 @@ from typing import Any, Tuple
 
 from .utils import (
     disk_monitors,
+    empty_cache_markers,
     format_bytes,
+    legacy_patcher_cache,
     ram_cache,
 )
 
@@ -66,10 +68,25 @@ class SimpleGlobalVRAMCacheRAMClearing:
                 f"{names}"
             )
         count = ram_cache().clear_all()
+        legacy_names = legacy_patcher_cache().names()
+        if legacy_names:
+            logger.info(
+                f"[VRAM-Cache-RAMClear] Clearing {len(legacy_names)} "
+                f"legacy RAM cache(s): {legacy_names}"
+            )
+        legacy_count = legacy_patcher_cache().clear_all()
+        empty_names = empty_cache_markers().names()
+        if empty_names:
+            logger.info(
+                f"[VRAM-Cache-RAMClear] Clearing {len(empty_names)} "
+                f"empty RAM marker(s): {empty_names}"
+            )
+        empty_count = empty_cache_markers().clear_all()
 
         elapsed = time.perf_counter() - t_start
         logger.info(
-            f"[VRAM-Cache-RAMClear] Done – {count} RAM cache(s) freed "
+            f"[VRAM-Cache-RAMClear] Done – {count} tensor RAM cache(s) and "
+            f"{legacy_count} legacy RAM cache(s), {empty_count} empty marker(s) freed "
             f"in {elapsed:.2f}s."
         )
         return (anything,)

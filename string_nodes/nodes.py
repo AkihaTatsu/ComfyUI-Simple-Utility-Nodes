@@ -3,7 +3,7 @@
 import json
 import os
 import time
-from typing import Tuple
+from typing import Any, Tuple
 
 from .utils import (
     append_string,
@@ -46,6 +46,71 @@ def _get_default_encoding(settings_key: str) -> str:
         return "utf-8"
 
     return _AVAILABLE_ENCODINGS[0]
+
+
+def _first_special_value(value: Any) -> Any:
+    """ComfyUI may pass hidden inputs as scalars or single-item lists."""
+    if isinstance(value, (list, tuple)) and value:
+        return value[0]
+    return value
+
+
+def _workflow_dicts_from_extra_pnginfo(extra_pnginfo: Any):
+    """Yield workflow dicts from ComfyUI's extra_pnginfo shapes."""
+    if isinstance(extra_pnginfo, dict):
+        workflow = extra_pnginfo.get("workflow")
+        if isinstance(workflow, dict):
+            yield workflow
+        return
+
+    if isinstance(extra_pnginfo, (list, tuple)):
+        for item in extra_pnginfo:
+            if not isinstance(item, dict):
+                continue
+            workflow = item.get("workflow")
+            if isinstance(workflow, dict):
+                yield workflow
+
+
+def _persist_display_text_to_workflow(
+    unique_id: Any,
+    extra_pnginfo: Any,
+    display_mode: bool,
+    display_text: str,
+) -> None:
+    """Persist display text into the workflow node's widget values."""
+    node_id = _first_special_value(unique_id)
+    if node_id is None:
+        return
+
+    for workflow in _workflow_dicts_from_extra_pnginfo(extra_pnginfo):
+        nodes = workflow.get("nodes")
+        if not isinstance(nodes, list):
+            continue
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if str(node.get("id")) != str(node_id):
+                continue
+
+            widget_values = node.get("widgets_values")
+            if isinstance(widget_values, dict):
+                widget_values.setdefault("display_mode", display_mode)
+                widget_values["display_text"] = display_text
+                return
+
+            if isinstance(widget_values, list):
+                if len(widget_values) < 1:
+                    widget_values.append(display_mode)
+                if len(widget_values) < 2:
+                    widget_values.append(display_text)
+                else:
+                    widget_values[1] = display_text
+                return
+
+            node["widgets_values"] = [display_mode, display_text]
+            return
 
 
 class SimpleStringAppending:
@@ -373,6 +438,14 @@ class SimpleMarkdownStringDisplay:
                     "label_on": "raw text",
                     "label_off": "markdown"
                 }),
+                "display_text": ("STRING", {
+                    "default": "",
+                    "multiline": True
+                }),
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
             }
         }
 
@@ -381,8 +454,21 @@ class SimpleMarkdownStringDisplay:
         """Always execute to ensure UI updates."""
         return float("nan")
 
-    def execute(self, string: str, display_mode: bool) -> dict:
+    def execute(
+        self,
+        string: str,
+        display_mode: bool,
+        display_text: str = "",
+        unique_id=None,
+        extra_pnginfo=None,
+    ) -> dict:
         """Execute and return the string with display mode info."""
+        _persist_display_text_to_workflow(
+            unique_id,
+            extra_pnginfo,
+            display_mode,
+            string,
+        )
         return {
             "ui": {"text": (string,)},
             "result": (string,)

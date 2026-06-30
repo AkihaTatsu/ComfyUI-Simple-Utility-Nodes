@@ -93,7 +93,7 @@
         }
     },
     "SimpleMarkdownStringDisplay": {
-        "node": "Display an input string as markdown-rendered rich text or raw text with passthrough output. Uses the PreviewAny-style dual preview (markdown / plaintext toggle). The markdown view supports GitHub Flavored Markdown, KaTeX math formulae, emoji shortcodes, images, tables, code blocks, and more.",
+        "node": "Display an input string as markdown-rendered rich text or raw text with passthrough output. The last displayed string is saved with the workflow, and readable markdown images are inlined as base64 for reload-safe previews. Uses the PreviewAny-style dual preview (markdown / plaintext toggle). The markdown view supports GitHub Flavored Markdown, KaTeX math formulae, emoji shortcodes, images, tables, code blocks, and more.",
         "inputs": {
             "string": "The string to display. Must be provided as an input connection.",
             "display_mode": "Toggle between rendered markdown (off/False) and raw text display (on/True). Default is markdown rendering."
@@ -233,6 +233,16 @@
         "node": "Clear ALL VRAM caches currently held in system RAM. Disk caches are NOT affected and remain available for future loading. Useful to reclaim RAM after the cached models are no longer needed.",
         "inputs": {
             "anything": "Passthrough input. Any data type is accepted and will be passed to the passthrough output."
+        },
+        "outputs": {
+            "passthrough": "Passthrough of the 'anything' input data."
+        }
+    },
+    "SimpleGlobalDeepCleanup": {
+        "node": "Best-effort RAM/VRAM cleanup for the current ComfyUI process. It clears invisible/internal caches immediately and schedules extra cleanup after the run ends. It does not clear visible output records, Global Image Preview history/current display, or Global Variable state. If multiple Deep Cleanup nodes run in one prompt, end-of-run cleanup runs once. Strictly returning to a fresh-start state requires restarting ComfyUI.",
+        "inputs": {
+            "cleanup_mode": "Choose what to clean: 'RAM + VRAM' clears internal RAM caches and loaded models/device caches; 'RAM' clears internal RAM caches and resets executor caches after the run; 'VRAM' unloads models and clears device allocator caches. Visible history/display state is preserved.",
+            "anything": "Passthrough input. Any data type is accepted and will be passed to the passthrough output. The passthrough object itself can remain cached until the prompt finishes."
         },
         "outputs": {
             "passthrough": "Passthrough of the 'anything' input data."

@@ -48,6 +48,8 @@ def _console_log(msg: str) -> None:
 # ──────────────────────────  Constants  ──────────────────────────
 CACHE_DIR_NAME = "vram_cache_store"
 SAFETENSORS_EXT = ".safetensors"
+LEGACY_PATCHER_EXT = ".legacy.pt"
+EMPTY_MARKER_EXT = ".empty.json"
 
 # Torch dtype → safetensors dtype-string (used by _write_safetensors)
 _TORCH_TO_ST_DTYPE: Dict[torch.dtype, str] = {
@@ -86,6 +88,18 @@ def get_cache_file_path(cache_name: str) -> str:
     """Return the full path for a cache file (safetensors format)."""
     safe_name = cache_name.replace(os.sep, "_").replace("/", "_").replace("\\", "_")
     return os.path.join(get_cache_directory(), f"{safe_name}{SAFETENSORS_EXT}")
+
+
+def get_legacy_patcher_cache_file_path(cache_name: str) -> str:
+    """Return the full path for a legacy ModelPatcher cache file."""
+    safe_name = cache_name.replace(os.sep, "_").replace("/", "_").replace("\\", "_")
+    return os.path.join(get_cache_directory(), f"{safe_name}{LEGACY_PATCHER_EXT}")
+
+
+def get_empty_marker_cache_file_path(cache_name: str) -> str:
+    """Return the full path for an intentionally-empty cache marker."""
+    safe_name = cache_name.replace(os.sep, "_").replace("/", "_").replace("\\", "_")
+    return os.path.join(get_cache_directory(), f"{safe_name}{EMPTY_MARKER_EXT}")
 
 
 # ──────────────────────────  Memory helpers  ──────────────────────────
@@ -207,6 +221,39 @@ def capture_vram_state_dict() -> Dict[str, torch.Tensor]:
         logger.info(f"[VRAM-Cache] Captured {len(state)} tensors from "
                      f"{model_count} loaded model(s) (zero-copy refs).")
     return state
+
+
+def capture_legacy_model_patchers() -> List[Any]:
+    """Capture ComfyUI ModelPatcher objects when no CUDA tensors are visible.
+
+    This preserves the behavior of the original VRAM cache node, which cached
+    ComfyUI's tracked ModelPatchers rather than only currently-CUDA tensors.
+    """
+    try:
+        import comfy.model_management as model_management
+    except ImportError:
+        logger.warning(
+            "[VRAM-Cache] comfy.model_management not available; "
+            "cannot use legacy ModelPatcher fallback."
+        )
+        return []
+
+    patchers: List[Any] = []
+    for loaded in getattr(model_management, "current_loaded_models", []):
+        patcher = getattr(loaded, "model", None)
+        if patcher is not None:
+            patchers.append(patcher)
+
+    if patchers:
+        logger.info(
+            f"[VRAM-Cache] Legacy fallback captured {len(patchers)} "
+            f"ComfyUI ModelPatcher object(s)."
+        )
+    else:
+        logger.warning(
+            "[VRAM-Cache] Legacy fallback found no ComfyUI tracked models."
+        )
+    return patchers
 
 
 # ──────────────────────────  Bulk VRAM → CPU transfer  ──────────────────────────
@@ -511,6 +558,271 @@ def ram_cache() -> RAMCacheManager:
     return RAMCacheManager()
 
 
+# ──────────────────────────  Legacy ModelPatcher cache  ──────────────────────────
+
+class LegacyPatcherCacheManager:
+    """Thread-safe cache for the original ModelPatcher-based VRAM behavior."""
+
+    _instance: Optional["LegacyPatcherCacheManager"] = None
+    _init_lock = threading.Lock()
+
+    def __new__(cls):
+        with cls._init_lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._caches = {}
+                cls._instance._lock = threading.Lock()
+            return cls._instance
+
+    def store(self, name: str, patchers: List[Any]) -> None:
+        with self._lock:
+            self._caches[name] = list(patchers)
+        logger.info(
+            f"[VRAM-Cache] Legacy RAM cache '{name}' stored – "
+            f"{len(patchers)} ModelPatcher object(s)."
+        )
+
+    def load(self, name: str) -> List[Any]:
+        with self._lock:
+            if name not in self._caches:
+                raise KeyError(f"Legacy ModelPatcher cache '{name}' not found.")
+            return self._caches[name]
+
+    def exists(self, name: str) -> bool:
+        with self._lock:
+            return name in self._caches
+
+    def clear_all(self) -> int:
+        with self._lock:
+            count = len(self._caches)
+            self._caches.clear()
+        gc.collect()
+        logger.info(f"[VRAM-Cache] Cleared {count} legacy RAM cache(s).")
+        return count
+
+    def release(self, name: str) -> None:
+        with self._lock:
+            self._caches.pop(name, None)
+        gc.collect()
+
+    def names(self) -> List[str]:
+        with self._lock:
+            return list(self._caches.keys())
+
+
+_LEGACY_DISK_CACHES: Dict[str, str] = {}
+_LEGACY_DISK_LOCK = threading.Lock()
+
+
+def legacy_patcher_cache() -> LegacyPatcherCacheManager:
+    return LegacyPatcherCacheManager()
+
+
+def _legacy_patcher_to_save_item(patcher: Any) -> Optional[Dict[str, Any]]:
+    model = getattr(patcher, "model", None)
+    if patcher is None or model is None:
+        return None
+
+    return {
+        "model": model,
+        "load_device": str(getattr(patcher, "load_device", "cuda")),
+        "offload_device": str(getattr(patcher, "offload_device", "cpu")),
+        "size": getattr(patcher, "size", 0),
+        "weight_inplace_update": getattr(patcher, "weight_inplace_update", False),
+    }
+
+
+def save_legacy_patchers_to_disk(
+    cache_name: str,
+    patchers: List[Any],
+) -> Tuple[str, float, int]:
+    """Save legacy ModelPatcher objects to disk using the original .pt shape."""
+    path = get_legacy_patcher_cache_file_path(cache_name)
+    save_data = []
+    for patcher in patchers:
+        item = _legacy_patcher_to_save_item(patcher)
+        if item is not None:
+            save_data.append(item)
+
+    if not save_data:
+        raise RuntimeError(
+            f"[VRAM-Cache] Legacy cache '{cache_name}' has no serializable models."
+        )
+
+    t0 = time.perf_counter()
+    torch.save(save_data, path)
+    elapsed = time.perf_counter() - t0
+    file_size = os.path.getsize(path)
+
+    with _LEGACY_DISK_LOCK:
+        _LEGACY_DISK_CACHES[cache_name] = path
+
+    logger.info(
+        f"[VRAM-Cache] Legacy disk save complete for '{cache_name}': "
+        f"{len(save_data)} model(s), {format_bytes(file_size)} written to \"{path}\"."
+    )
+    return path, elapsed, file_size
+
+
+def load_legacy_patchers_from_disk(cache_name: str) -> Optional[List[Any]]:
+    """Load legacy ModelPatcher objects from a .pt cache file."""
+    with _LEGACY_DISK_LOCK:
+        path = _LEGACY_DISK_CACHES.get(cache_name)
+    if path is None:
+        candidate = get_legacy_patcher_cache_file_path(cache_name)
+        path = candidate if os.path.isfile(candidate) else None
+    if path is None or not os.path.isfile(path):
+        return None
+
+    try:
+        from comfy.model_patcher import ModelPatcher
+    except ImportError as exc:
+        raise RuntimeError(
+            "[VRAM-Cache] Cannot import comfy.model_patcher.ModelPatcher "
+            "for legacy cache restore."
+        ) from exc
+
+    t0 = time.perf_counter()
+    save_data = torch.load(path, weights_only=False)
+    patchers: List[Any] = []
+    for item in save_data:
+        patchers.append(
+            ModelPatcher(
+                model=item["model"],
+                load_device=torch.device(item["load_device"]),
+                offload_device=torch.device(item["offload_device"]),
+                size=item["size"],
+                weight_inplace_update=item.get("weight_inplace_update", False),
+            )
+        )
+
+    elapsed = time.perf_counter() - t0
+    file_size = os.path.getsize(path)
+    logger.info(
+        f"[VRAM-Cache] Legacy disk load complete for '{cache_name}': "
+        f"{len(patchers)} model(s), {format_bytes(file_size)} in {elapsed:.2f}s."
+    )
+    return patchers
+
+
+def legacy_patcher_disk_cache_exists(cache_name: str) -> bool:
+    with _LEGACY_DISK_LOCK:
+        path = _LEGACY_DISK_CACHES.get(cache_name)
+    return bool(path and os.path.isfile(path)) or os.path.isfile(
+        get_legacy_patcher_cache_file_path(cache_name)
+    )
+
+
+def legacy_patcher_disk_cache_names() -> List[str]:
+    with _LEGACY_DISK_LOCK:
+        return list(_LEGACY_DISK_CACHES.keys())
+
+
+# ──────────────────────────  Empty cache markers  ──────────────────────────
+
+class EmptyCacheMarkerManager:
+    """Track cache names that intentionally saved an empty VRAM state."""
+
+    _instance: Optional["EmptyCacheMarkerManager"] = None
+    _init_lock = threading.Lock()
+
+    def __new__(cls):
+        with cls._init_lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._markers = set()
+                cls._instance._lock = threading.Lock()
+            return cls._instance
+
+    def store(self, name: str) -> None:
+        with self._lock:
+            self._markers.add(name)
+        logger.info(f"[VRAM-Cache] Empty RAM marker '{name}' stored.")
+
+    def exists(self, name: str) -> bool:
+        with self._lock:
+            return name in self._markers
+
+    def release(self, name: str) -> None:
+        with self._lock:
+            self._markers.discard(name)
+
+    def clear_all(self) -> int:
+        with self._lock:
+            count = len(self._markers)
+            self._markers.clear()
+        logger.info(f"[VRAM-Cache] Cleared {count} empty RAM marker(s).")
+        return count
+
+    def names(self) -> List[str]:
+        with self._lock:
+            return sorted(self._markers)
+
+
+_EMPTY_DISK_MARKERS: set[str] = set()
+_EMPTY_DISK_LOCK = threading.Lock()
+
+
+def empty_cache_markers() -> EmptyCacheMarkerManager:
+    return EmptyCacheMarkerManager()
+
+
+def store_empty_cache_marker(cache_name: str) -> str:
+    """Store an intentionally-empty cache marker in RAM and on disk."""
+    empty_cache_markers().store(cache_name)
+
+    path = get_empty_marker_cache_file_path(cache_name)
+    data = {
+        "type": "empty_vram_cache",
+        "cache_name": cache_name,
+        "created_at": time.time(),
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        _json.dump(data, f, separators=(",", ":"))
+
+    with _EMPTY_DISK_LOCK:
+        _EMPTY_DISK_MARKERS.add(cache_name)
+
+    logger.info(
+        f"[VRAM-Cache] Empty disk marker '{cache_name}' written to \"{path}\"."
+    )
+    return path
+
+
+def empty_cache_marker_exists(cache_name: str) -> bool:
+    if empty_cache_markers().exists(cache_name):
+        return True
+    return os.path.isfile(get_empty_marker_cache_file_path(cache_name))
+
+
+def empty_disk_marker_names() -> List[str]:
+    with _EMPTY_DISK_LOCK:
+        names = set(_EMPTY_DISK_MARKERS)
+    try:
+        cache_dir = get_cache_directory()
+        for filename in os.listdir(cache_dir):
+            if filename.endswith(EMPTY_MARKER_EXT):
+                names.add(filename[: -len(EMPTY_MARKER_EXT)])
+    except OSError:
+        pass
+    return sorted(names)
+
+
+def release_empty_cache_marker(cache_name: str, remove_disk: bool = False) -> None:
+    empty_cache_markers().release(cache_name)
+    with _EMPTY_DISK_LOCK:
+        _EMPTY_DISK_MARKERS.discard(cache_name)
+    if remove_disk:
+        path = get_empty_marker_cache_file_path(cache_name)
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError as exc:
+                logger.warning(
+                    f"[VRAM-Cache] Could not remove empty marker '{path}': {exc}"
+                )
+
+
 # ──────────────────────────  Disk I/O  ──────────────────────────
 
 
@@ -812,6 +1124,14 @@ def _shutdown_cleanup() -> None:
         pass
     try:
         RAMCacheManager().clear_all()
+    except Exception:
+        pass
+    try:
+        LegacyPatcherCacheManager().clear_all()
+    except Exception:
+        pass
+    try:
+        EmptyCacheMarkerManager().clear_all()
     except Exception:
         pass
     try:

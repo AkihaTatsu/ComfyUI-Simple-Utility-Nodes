@@ -17,9 +17,12 @@ Architecture:
   API to work even for the standalone viewer page.
 """
 
+import atexit
 import json
 import os
+import shutil
 import threading
+import uuid
 from typing import Dict, List
 
 # Path to persist the last user prompt across server restarts.
@@ -34,6 +37,7 @@ _PERSIST_PATH = os.path.normpath(os.path.join(_PERSIST_DIR, "last_prompt.json"))
 _latest_images: List[Dict[str, str]] = []
 _latest_images_lock = threading.Lock()
 _latest_images_counter: int = 0  # bumped each time new executed images arrive
+_latest_images_signature: tuple | None = None
 
 # Rolling history buffer — keeps the last N image batches so that the
 # standalone viewer never misses images between its 300 ms poll cycles.
@@ -45,6 +49,10 @@ _latest_preview_lock = threading.Lock()
 _latest_preview_counter: int = 0  # bumped each time a new blob arrives
 
 _MEDIA_KIND_KEY = "_simple_media_kind"
+_MEDIA_KEY = "_simple_media_key"
+_CACHED_URL_KEY = "_simple_cached_url"
+_CACHE_FILE_KEY = "_simple_cache_file"
+_CACHE_DIR_NAME = "global_image_preview_cache"
 _VIDEO_EXTENSIONS = {
     ".mp4",
     ".webm",
@@ -57,6 +65,13 @@ _VIDEO_EXTENSIONS = {
 }
 
 
+def _console_log(msg: str) -> None:
+    try:
+        print(msg, flush=True)
+    except Exception:
+        pass
+
+
 def _is_truthy_animated(value) -> bool:
     if isinstance(value, (list, tuple)):
         return any(bool(v) for v in value)
@@ -67,9 +82,150 @@ def _guess_media_kind(info: dict, animated: bool = False) -> str:
     fmt = str(info.get("format") or info.get("mime_type") or "").lower()
     filename = str(info.get("filename") or "").lower()
     ext = os.path.splitext(filename)[1]
-    if fmt.startswith("video/") or ext in _VIDEO_EXTENSIONS or animated:
+    if fmt.startswith("image/"):
+        return "image"
+    if fmt.startswith("video/") or ext in _VIDEO_EXTENSIONS:
         return "video"
     return "image"
+
+
+def _cache_directory_path() -> str:
+    """Return the media cache directory path without creating it."""
+    try:
+        import folder_paths
+        base = folder_paths.get_temp_directory()
+    except Exception:
+        base = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..", "..", "..", "..", "temp"
+        )
+    return os.path.join(base, _CACHE_DIR_NAME)
+
+
+def get_cache_directory() -> str:
+    cache_dir = _cache_directory_path()
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+
+def _safe_join(base: str, subfolder: str, filename: str) -> str | None:
+    base_abs = os.path.abspath(base)
+    path = os.path.abspath(os.path.join(base_abs, subfolder or "", filename))
+    try:
+        common = os.path.commonpath([base_abs, path])
+    except ValueError:
+        return None
+    if common != base_abs:
+        return None
+    return path
+
+
+def _source_path_for_media(info: dict) -> str | None:
+    filename = info.get("filename")
+    if not filename:
+        return None
+    media_type = str(info.get("type") or "output").lower()
+    try:
+        import folder_paths
+        if media_type == "temp":
+            base = folder_paths.get_temp_directory()
+        elif media_type == "input":
+            base = folder_paths.get_input_directory()
+        else:
+            base = folder_paths.get_output_directory()
+    except Exception:
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        base = os.path.join(root, media_type if media_type in ("temp", "input") else "output")
+    return _safe_join(base, str(info.get("subfolder") or ""), str(filename))
+
+
+def _make_media_key(item: dict, source_path: str | None = None) -> str:
+    base = f"{item.get('type', '')}/{item.get('subfolder', '')}/{item.get('filename', '')}"
+    if source_path and os.path.isfile(source_path):
+        try:
+            st = os.stat(source_path)
+            return f"{base}:{st.st_mtime_ns}:{st.st_size}"
+        except OSError:
+            pass
+    return base
+
+
+def _cache_url_for_file(cache_file: str) -> str:
+    return f"/simple_utility/global_image_preview/media/{cache_file}"
+
+
+def _copy_media_to_cache(item: dict, source_path: str | None) -> None:
+    if not source_path or not os.path.isfile(source_path):
+        return
+    try:
+        ext = os.path.splitext(str(item.get("filename") or ""))[1]
+        cache_file = f"{uuid.uuid4().hex}{ext}"
+        dst = os.path.join(get_cache_directory(), cache_file)
+        shutil.copy2(source_path, dst)
+        item[_CACHE_FILE_KEY] = cache_file
+        item[_CACHED_URL_KEY] = _cache_url_for_file(cache_file)
+    except Exception:
+        pass
+
+
+def _cache_files_from_items(items: List[Dict[str, str]]) -> set[str]:
+    files = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        cache_file = item.get(_CACHE_FILE_KEY)
+        if cache_file:
+            files.add(str(cache_file))
+    return files
+
+
+def _delete_cache_files(cache_files: set[str]) -> None:
+    if not cache_files:
+        return
+    cache_dir = _cache_directory_path()
+    for cache_file in cache_files:
+        path = _safe_join(cache_dir, "", cache_file)
+        if not path:
+            continue
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+
+def _remove_cache_dir() -> None:
+    try:
+        cache_dir = _cache_directory_path()
+        if os.path.isdir(cache_dir):
+            shutil.rmtree(cache_dir, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _startup_cleanup() -> None:
+    _remove_cache_dir()
+
+
+def _shutdown_cleanup() -> None:
+    _console_log("[Global-Image-Preview] Shutdown: clearing media cache.")
+    _remove_cache_dir()
+
+
+def _all_cached_files_locked() -> set[str]:
+    files = _cache_files_from_items(_latest_images)
+    for _, images in _image_history:
+        files.update(_cache_files_from_items(images))
+    return files
+
+
+def _media_identity(item: dict) -> tuple[str, str, str]:
+    """Stable identity for duplicate detection, independent of object identity."""
+    return (
+        str(item.get("type") or ""),
+        str(item.get("subfolder") or ""),
+        str(item.get("filename") or ""),
+    )
 
 
 def _annotate_media_items(images: List[Dict[str, str]], output: dict) -> List[Dict[str, str]]:
@@ -85,20 +241,84 @@ def _annotate_media_items(images: List[Dict[str, str]], output: dict) -> List[Di
         if not isinstance(info, dict):
             continue
         item = dict(info)
+        source_path = _source_path_for_media(item)
         item[_MEDIA_KIND_KEY] = _guess_media_kind(item, animated)
+        item[_MEDIA_KEY] = _make_media_key(item, source_path)
+        _copy_media_to_cache(item, source_path)
         annotated.append(item)
     return annotated
 
 
-def _set_latest_images(images: List[Dict[str, str]]) -> None:
-    global _latest_images_counter
+def _extract_media_items(output: dict) -> List[Dict[str, str]]:
+    """Collect previewable media dicts from a ComfyUI executed output."""
+    items: List[Dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for value in output.values():
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if not isinstance(item, dict) or not item.get("filename"):
+                continue
+            identity = _media_identity(item)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            items.append(item)
+    return items
+
+
+def _media_batch_signature(
+    images: List[Dict[str, str]],
+    node_id: str | None,
+    display_node_id: str | None,
+    prompt_id: str | None,
+) -> tuple:
+    return (
+        str(prompt_id or ""),
+        str(display_node_id or ""),
+        str(node_id or ""),
+        tuple(str(item.get(_MEDIA_KEY) or "/".join(_media_identity(item))) for item in images),
+    )
+
+
+def _set_latest_images(
+    images: List[Dict[str, str]],
+    signature: tuple | None = None,
+) -> bool:
+    global _latest_images_counter, _latest_images_signature
+    evicted_files: set[str] = set()
     with _latest_images_lock:
+        if signature is not None and signature == _latest_images_signature:
+            return False
         _latest_images.clear()
         _latest_images.extend(images)
         _latest_images_counter += 1
+        _latest_images_signature = signature
         _image_history.append((_latest_images_counter, list(images)))
         if len(_image_history) > _IMAGE_HISTORY_MAX:
+            evicted = _image_history[:len(_image_history) - _IMAGE_HISTORY_MAX]
+            for _, evicted_images in evicted:
+                evicted_files.update(_cache_files_from_items(evicted_images))
             del _image_history[:len(_image_history) - _IMAGE_HISTORY_MAX]
+            retained_files = _all_cached_files_locked()
+            evicted_files.difference_update(retained_files)
+    _delete_cache_files(evicted_files)
+    return True
+
+
+def _record_executed_media(
+    output: dict,
+    node_id: str | None,
+    display_node_id: str | None,
+    prompt_id: str | None,
+) -> None:
+    images = _extract_media_items(output)
+    if not images:
+        return
+    annotated = _annotate_media_items(images, output)
+    signature = _media_batch_signature(annotated, node_id, display_node_id, prompt_id)
+    if not _set_latest_images(annotated, signature):
+        _delete_cache_files(_cache_files_from_items(annotated))
 
 
 def get_latest_images() -> tuple[List[Dict[str, str]], int]:
@@ -117,13 +337,27 @@ def get_images_since(since_counter: int) -> tuple[list, int]:
 
 
 def clear_image_history() -> int:
-    """Clear the in-memory image history buffer.
+    """Clear the in-memory image and preview history buffers.
 
     Returns the current counter value (so the viewer can fast-forward).
     """
+    global _latest_images_signature, _latest_preview_blob
     with _latest_images_lock:
+        cache_files = _all_cached_files_locked()
+        _latest_images.clear()
         _image_history.clear()
-        return _latest_images_counter
+        _latest_images_signature = None
+        counter = _latest_images_counter
+    with _latest_preview_lock:
+        _latest_preview_blob = None
+    _delete_cache_files(cache_files)
+    try:
+        cache_dir = _cache_directory_path()
+        if os.path.isdir(cache_dir) and not os.listdir(cache_dir):
+            os.rmdir(cache_dir)
+    except Exception:
+        pass
+    return counter
 
 
 def _set_latest_preview_blob(blob: bytes) -> None:
@@ -276,9 +510,12 @@ def _install_server_hook() -> None:
             if event == "executed" and isinstance(data, dict):
                 output = data.get("output")
                 if output and isinstance(output, dict):
-                    images = output.get("images")
-                    if images and isinstance(images, list) and len(images) > 0:
-                        _set_latest_images(_annotate_media_items(images, output))
+                    _record_executed_media(
+                        output,
+                        data.get("node"),
+                        data.get("display_node"),
+                        data.get("prompt_id"),
+                    )
 
             # Track which node is currently executing
             if event == "executing" and isinstance(data, dict):
@@ -960,6 +1197,27 @@ def _register_routes() -> None:
             })
         return web.Response(status=404)
 
+    @routes.get("/simple_utility/global_image_preview/media/{cache_file}")
+    async def _api_cached_media(request):
+        """Serve a media file copied into this extension's session cache."""
+        cache_file = request.match_info.get("cache_file", "")
+        path = _safe_join(_cache_directory_path(), "", cache_file)
+        if not path or not os.path.isfile(path):
+            return web.Response(status=404, headers=_NO_CACHE_HDRS)
+        headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+        try:
+            return web.FileResponse(
+                path,
+                headers=headers,
+                chunk_size=256 * 1024,
+            )
+        except TypeError:
+            return web.FileResponse(path, headers=headers)
+
     @routes.get("/simple_utility/global_image_preview/viewer")
     async def _viewer_page(request):
         """Serve the fullscreen auto-updating viewer HTML page.
@@ -996,6 +1254,8 @@ def _register_routes() -> None:
 
 # Run at import time
 try:
+    atexit.register(_shutdown_cleanup)
+    _startup_cleanup()
     _install_server_hook()
     _register_routes()
 except Exception:

@@ -31,14 +31,20 @@ import torch
 
 from .utils import (
     bulk_vram_to_cpu,
+    capture_legacy_model_patchers,
     capture_vram_state_dict,
     cleanup_current_vram,
     disk_monitors,
     format_bytes,
     get_cache_file_path,
+    get_legacy_patcher_cache_file_path,
     get_free_ram_bytes,
     get_total_vram_cache_size,
+    legacy_patcher_cache,
     ram_cache,
+    release_empty_cache_marker,
+    save_legacy_patchers_to_disk,
+    store_empty_cache_marker,
 )
 
 logger = logging.getLogger("ComfyUI-VRAM-Cache")
@@ -116,10 +122,15 @@ class SimpleGlobalVRAMCacheSaving:
         state_dict = capture_vram_state_dict()
 
         if not state_dict:
-            logger.warning(
-                f"[VRAM-Cache-Save] No tensors found in VRAM for '{cache_name}'. "
-                f"Nothing to save."
-            )
+            patchers = capture_legacy_model_patchers()
+            if not patchers:
+                logger.warning(
+                    f"[VRAM-Cache-Save] No tensors or tracked models found for "
+                    f"'{cache_name}'. Storing empty cache marker."
+                )
+                self._empty_cache_branch(cache_name)
+                return (anything,)
+            self._legacy_patcher_branch(cache_name, cache_mode, patchers)
             return (anything,)
 
         cache_size = get_total_vram_cache_size(state_dict)
@@ -174,6 +185,9 @@ class SimpleGlobalVRAMCacheSaving:
             disk_monitors().wait_for(cache_name)  # ensure disk save isn't reading it
             ram_cache().release(cache_name)
             gc.collect()
+        if legacy_patcher_cache().exists(cache_name):
+            legacy_patcher_cache().release(cache_name)
+        release_empty_cache_marker(cache_name, remove_disk=True)
 
         # Step b – Bulk VRAM -> CPU transfer (single or chunked DMA)
         cpu_state_dict = bulk_vram_to_cpu(state_dict)
@@ -207,6 +221,9 @@ class SimpleGlobalVRAMCacheSaving:
             f"(need {format_bytes(cache_size)} RAM but only "
             f"{format_bytes(free_ram)} available)."
         )
+        if legacy_patcher_cache().exists(cache_name):
+            legacy_patcher_cache().release(cache_name)
+        release_empty_cache_marker(cache_name, remove_disk=True)
 
         # Step a – Start background thread that reads directly from VRAM
         monitor = disk_monitors().start_monitor(cache_name, state_dict)
@@ -222,6 +239,82 @@ class SimpleGlobalVRAMCacheSaving:
         # Step c – Clean VRAM after save completes
         del state_dict
         cleanup_current_vram()
+
+    # ── Legacy ModelPatcher branch ───────────────────────────
+    def _legacy_patcher_branch(
+        self,
+        cache_name: str,
+        cache_mode: str,
+        patchers: list,
+    ) -> None:
+        logger.warning(
+            f"[VRAM-Cache-Save] No CUDA tensors found for '{cache_name}', "
+            f"using legacy ModelPatcher fallback with {len(patchers)} model(s)."
+        )
+
+        # Remove stale tensor caches with the same name so Load cannot prefer
+        # an older safetensors cache over the just-created legacy cache.
+        if ram_cache().exists(cache_name):
+            disk_monitors().wait_for(cache_name)
+            ram_cache().release(cache_name)
+            gc.collect()
+        tensor_disk_path = get_cache_file_path(cache_name)
+        if os.path.isfile(tensor_disk_path):
+            try:
+                os.remove(tensor_disk_path)
+            except OSError as exc:
+                logger.warning(
+                    f"[VRAM-Cache-Save] Could not remove stale tensor disk "
+                    f"cache '{tensor_disk_path}': {exc}"
+                )
+        release_empty_cache_marker(cache_name, remove_disk=True)
+
+        legacy_patcher_cache().store(cache_name, patchers)
+
+        cleanup_current_vram()
+
+        try:
+            path, elapsed, file_size = save_legacy_patchers_to_disk(
+                cache_name, patchers
+            )
+            logger.info(
+                f"[VRAM-Cache-Save] Legacy fallback saved '{cache_name}' "
+                f"to {path} ({format_bytes(file_size)} in {elapsed:.2f}s, "
+                f"mode={cache_mode})."
+            )
+        except Exception as exc:
+            logger.warning(
+                f"[VRAM-Cache-Save] Legacy disk save failed for '{cache_name}', "
+                f"but RAM fallback remains available for this session: {exc}"
+            )
+
+    # ── Empty cache branch ───────────────────────────────────
+    def _empty_cache_branch(self, cache_name: str) -> None:
+        if ram_cache().exists(cache_name):
+            disk_monitors().wait_for(cache_name)
+            ram_cache().release(cache_name)
+            gc.collect()
+        if legacy_patcher_cache().exists(cache_name):
+            legacy_patcher_cache().release(cache_name)
+
+        for path in (
+            get_cache_file_path(cache_name),
+            get_legacy_patcher_cache_file_path(cache_name),
+        ):
+            if os.path.isfile(path):
+                try:
+                    os.remove(path)
+                except OSError as exc:
+                    logger.warning(
+                        f"[VRAM-Cache-Save] Could not remove stale cache "
+                        f"'{path}': {exc}"
+                    )
+
+        marker_path = store_empty_cache_marker(cache_name)
+        logger.info(
+            f"[VRAM-Cache-Save] Empty VRAM cache marker stored for "
+            f"'{cache_name}' at {marker_path}."
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════

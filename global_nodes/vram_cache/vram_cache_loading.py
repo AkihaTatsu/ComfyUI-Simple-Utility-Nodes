@@ -23,8 +23,15 @@ from .utils import (
     cleanup_current_vram,
     disk_cache_exists,
     disk_monitors,
+    empty_cache_marker_exists,
+    empty_cache_markers,
+    empty_disk_marker_names,
     format_bytes,
     get_total_vram_cache_size,
+    legacy_patcher_cache,
+    legacy_patcher_disk_cache_exists,
+    legacy_patcher_disk_cache_names,
+    load_legacy_patchers_from_disk,
     load_state_dict_from_disk,
     ram_cache,
 )
@@ -106,6 +113,29 @@ def _restore_models_to_vram(state_dict: Dict[str, torch.Tensor]) -> None:
         _move_state_dict_to_device(params, device)
 
 
+def _restore_legacy_patchers_to_vram(patchers: List[Any], source: str, cache_name: str) -> None:
+    """Restore legacy ModelPatcher cache entries with ComfyUI model_management."""
+    try:
+        from comfy.model_management import load_models_gpu
+    except ImportError as exc:
+        raise RuntimeError(
+            "[VRAM-Cache-Load] comfy.model_management not available; "
+            "cannot restore legacy ModelPatcher cache."
+        ) from exc
+
+    alive = [p for p in patchers if p is not None]
+    if not alive:
+        raise RuntimeError(
+            f"[VRAM-Cache-Load] Legacy cache '{cache_name}' contains no live "
+            f"ModelPatcher objects."
+        )
+
+    load_models_gpu(alive)
+    logger.info(
+        f"[VRAM-Cache-Load] Restored {len(alive)} legacy ModelPatcher "
+        f"object(s) from {source} cache '{cache_name}' to VRAM."
+    )
+
 
 # ══════════════════════════════════════════════════════════════════════
 #  Node class
@@ -151,25 +181,47 @@ class SimpleGlobalVRAMCacheLoading:
         cache_name = cache_name.strip()
         t_start = time.perf_counter()
 
-        # Step 1 – clean VRAM ──────────────────────────────────
-
-        cleanup_current_vram()
-
-        # Step 2 – detect source ───────────────────────────────
+        # Step 1 – detect source ───────────────────────────────
         has_ram = ram_cache().exists(cache_name)
         has_disk = disk_cache_exists(cache_name)
+        has_legacy_ram = legacy_patcher_cache().exists(cache_name)
+        has_legacy_disk = legacy_patcher_disk_cache_exists(cache_name)
+        has_empty_marker = empty_cache_marker_exists(cache_name)
+
+        if not (has_ram or has_disk or has_legacy_ram or has_legacy_disk):
+            if has_empty_marker:
+                logger.info(
+                    f"[VRAM-Cache-Load] Empty cache marker found for "
+                    f"'{cache_name}'. Passing through without VRAM changes."
+                )
+                return (anything,)
+
+            raise FileNotFoundError(
+                f"[VRAM-Cache-Load] No cache found for '{cache_name}'. "
+                f"Available tensor RAM caches: {ram_cache().names()}. "
+                f"Available legacy RAM caches: {legacy_patcher_cache().names()}. "
+                f"Available legacy disk caches: {legacy_patcher_disk_cache_names()}. "
+                f"Available empty RAM markers: {empty_cache_markers().names()}. "
+                f"Available empty disk markers: {empty_disk_marker_names()}. "
+                f"Check that a 'Simple Global VRAM Cache Saving' node with the "
+                f"same cache_name has executed before this node."
+            )
+
+        # Step 2 – clean VRAM before restoring a non-empty cache ─
+        cleanup_current_vram()
 
         if has_ram:
             state = self._load_from_ram(cache_name)
         elif has_disk:
             state = self._load_from_disk(cache_name)
-        else:
-            raise FileNotFoundError(
-                f"[VRAM-Cache-Load] No cache found for '{cache_name}'. "
-                f"Available RAM caches: {ram_cache().names()}. "
-                f"Check that a 'Simple Global VRAM Cache Saving' node with the "
-                f"same cache_name has executed before this node."
-            )
+        elif has_legacy_ram:
+            patchers = self._load_legacy_from_ram(cache_name)
+            _restore_legacy_patchers_to_vram(patchers, "RAM", cache_name)
+            return (anything,)
+        elif has_legacy_disk:
+            patchers = self._load_legacy_from_disk(cache_name)
+            _restore_legacy_patchers_to_vram(patchers, "disk", cache_name)
+            return (anything,)
 
         # Step 3 – push to VRAM / restore models ──────────────
         _restore_models_to_vram(state)
@@ -211,6 +263,25 @@ class SimpleGlobalVRAMCacheLoading:
 
         state = load_state_dict_from_disk(cache_name, device=device_str)
         return state
+
+    # ── Legacy ModelPatcher load paths ────────────────────────
+    def _load_legacy_from_ram(self, cache_name: str) -> List[Any]:
+        patchers = legacy_patcher_cache().load(cache_name)
+        logger.info(
+            f"[VRAM-Cache-Load] Legacy RAM read '{cache_name}': "
+            f"{len(patchers)} ModelPatcher object(s)."
+        )
+        return patchers
+
+    def _load_legacy_from_disk(self, cache_name: str) -> List[Any]:
+        patchers = load_legacy_patchers_from_disk(cache_name)
+        if not patchers:
+            raise FileNotFoundError(
+                f"[VRAM-Cache-Load] Legacy disk cache '{cache_name}' exists "
+                f"but could not be loaded."
+            )
+        legacy_patcher_cache().store(cache_name, patchers)
+        return patchers
 
 
 # ══════════════════════════════════════════════════════════════════════

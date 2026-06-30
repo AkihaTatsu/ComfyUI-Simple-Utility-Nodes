@@ -264,7 +264,7 @@ A markdown note node with click-to-edit rich text rendering and string output. C
 
 #### ⛏️ Simple Markdown String Display
 
-Display an input string as markdown-rendered rich text or raw text with passthrough output.
+Display an input string as markdown-rendered rich text or raw text with passthrough output. The last displayed string is saved with the workflow, and readable markdown images are inlined as base64 for reload-safe previews.
 
 <details>
 <summary>Details</summary>
@@ -684,5 +684,37 @@ Clear **all** VRAM caches currently held in system RAM.  Before clearing, this n
 
 **Usage:**
 Add this node after you no longer need the fast-path cached models to reclaim system RAM.  All background disk-save threads are joined first so that disk caches are guaranteed to be complete.  Disk caches can still be loaded by a `Simple Global VRAM Cache Loading` node after RAM is cleared.
+
+</details>
+
+#### ⛏️ Simple Global Deep Cleanup
+
+Best-effort RAM/VRAM cleanup for the current ComfyUI process. This is useful at the end of large workflows to reduce leftover memory pressure before the next run.
+
+<details>
+<summary>Details</summary>
+
+**Important limits:**
+- This node can free many internal ComfyUI and Simple Utility caches, but it cannot strictly restore the process to the same state as a fresh ComfyUI launch.
+- It preserves visible/user-facing state, including ComfyUI output records, Global Image Preview history/current display, and Simple Global Variable values.
+- A true fresh-start state requires restarting the ComfyUI process.
+- If a loop carries large IMAGE/LATENT batches, this node can only help after the loop and prompt finish. It cannot reduce the RAM peak that already happens while the loop is running.
+- The passthrough output itself may remain referenced by ComfyUI until the prompt finishes.
+
+**Modes:**
+- `RAM + VRAM` (default): Clears internal RAM caches, unloads models, clears device caches, and schedules one end-of-run executor cache reset.
+- `RAM`: Clears internal RAM caches and schedules one end-of-run executor cache reset. Models are not actively unloaded.
+- `VRAM`: Unloads models and clears device allocator caches. Simple Utility RAM caches are not cleared.
+
+**End-of-run cleanup:**
+
+Running this node schedules an extra cleanup pass after the current prompt finishes. If multiple `Simple Global Deep Cleanup` nodes run in the same prompt, the end-of-run cleanup is performed only once, with the strongest requested mode.
+
+**Inputs:**
+- `cleanup_mode`: `RAM + VRAM`, `RAM`, or `VRAM`
+- `anything`: Passthrough input (any data type)
+
+**Outputs:**
+- `passthrough`: Passthrough of input
 
 </details>

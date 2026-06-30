@@ -12,5 +12,8 @@
     },
     "SimpleGlobalVRAMCacheLoading": {
         "default_cache_name": "VRAM_cache"
+    },
+    "SimpleGlobalDeepCleanup": {
+        "default_cleanup_mode": "RAM + VRAM"
     }
 }

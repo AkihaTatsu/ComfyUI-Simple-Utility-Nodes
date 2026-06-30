@@ -252,6 +252,85 @@ function renderMarkdownFull(text) {
     return processed;
 }
 
+function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+    });
+}
+
+async function imageUrlToDataUrl(url) {
+    if (!url || url.startsWith("data:")) {
+        return url;
+    }
+
+    const absoluteUrl = new URL(url, window.location.href).href;
+    const response = await fetch(absoluteUrl, { credentials: "same-origin" });
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+    }
+
+    return await blobToDataUrl(await response.blob());
+}
+
+async function inlineMarkdownImages(markdown) {
+    const source = String(markdown ?? "");
+    const imagePattern = /!\[([^\]\n]*)\]\(\s*([^)\s]+)(\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
+    const replacements = [];
+    const cache = new Map();
+
+    for (const match of source.matchAll(imagePattern)) {
+        const [fullMatch, altText, imageUrl, title = ""] = match;
+        if (!imageUrl || imageUrl.startsWith("data:")) {
+            continue;
+        }
+
+        try {
+            let dataUrlPromise = cache.get(imageUrl);
+            if (!dataUrlPromise) {
+                dataUrlPromise = imageUrlToDataUrl(imageUrl);
+                cache.set(imageUrl, dataUrlPromise);
+            }
+            const dataUrl = await dataUrlPromise;
+            replacements.push({
+                index: match.index,
+                length: fullMatch.length,
+                value: `![${altText}](${dataUrl}${title})`,
+            });
+        } catch (error) {
+            console.warn(
+                `[SimpleMarkdown] Could not inline markdown image: ${imageUrl}`,
+                error
+            );
+        }
+    }
+
+    if (!replacements.length) {
+        return source;
+    }
+
+    let result = "";
+    let cursor = 0;
+    for (const replacement of replacements) {
+        result += source.slice(cursor, replacement.index);
+        result += replacement.value;
+        cursor = replacement.index + replacement.length;
+    }
+    result += source.slice(cursor);
+    return result;
+}
+
+function normalizePreviewText(text) {
+    return Array.isArray(text) ? text.join("\n") : String(text ?? "");
+}
+
+function markGraphDirty() {
+    app.graph?.setDirtyCanvas?.(true, true);
+    app.canvas?.setDirty?.(true, true);
+}
+
 // ============================================================================
 // CSS injection
 // ============================================================================
@@ -823,6 +902,36 @@ app.registerExtension({
                     app
                 ).widget;
 
+                const displayTextWidget = this.widgets?.find(w => w.name === "display_text");
+                if (displayTextWidget) {
+                    displayTextWidget.hidden = true;
+                    displayTextWidget.options = displayTextWidget.options || {};
+                    displayTextWidget.options.hidden = true;
+                    displayTextWidget.options.read_only = true;
+                    displayTextWidget.serialize = true;
+                    if (displayTextWidget.element) {
+                        displayTextWidget.element.readOnly = true;
+                        displayTextWidget.element.style.display = "none";
+                    }
+                    if (displayTextWidget.inputEl) {
+                        displayTextWidget.inputEl.readOnly = true;
+                        displayTextWidget.inputEl.style.display = "none";
+                    }
+                }
+
+                const setPreviewValue = (text, persist = false) => {
+                    const value = normalizePreviewText(text);
+                    if (persist) {
+                        const stateWidget = this.widgets?.find(w => w.name === "display_text");
+                        if (stateWidget) {
+                            stateWidget.value = value;
+                            markGraphDirty();
+                        }
+                    }
+                    mdWidget.value = value;
+                    plainWidget.value = value;
+                };
+
                 // Sync visibility from the Python-side display_mode widget
                 const syncVisibility = () => {
                     const dmw = this.widgets?.find(w => w.name === "display_mode");
@@ -863,14 +972,17 @@ app.registerExtension({
                 plainWidget.hidden = true;
                 plainWidget.options.hidden = true;
 
+                setPreviewValue(displayTextWidget?.value ?? "", false);
                 syncVisibility();
 
                 // Re-sync after workflow restore — onConfigure is called
-                // after the framework has set all widget values from the
-                // saved workflow, so display_mode is up-to-date here.
+                // after the framework has set all widget values from the saved
+                // workflow, so display_mode and display_text are up-to-date.
                 const origOnConfigure = this.onConfigure;
                 this.onConfigure = function () {
                     const r = origOnConfigure?.apply(this, arguments);
+                    const stateWidget = this.widgets?.find(w => w.name === "display_text");
+                    setPreviewValue(stateWidget?.value ?? "", false);
                     syncVisibility();
                     return r;
                 };
@@ -882,12 +994,42 @@ app.registerExtension({
             const onExecuted = nodeType.prototype.onExecuted;
             nodeType.prototype.onExecuted = function (message) {
                 const r = onExecuted?.apply(this, [message]);
+                if (message?.text == null) {
+                    return r;
+                }
+                const text = Array.isArray(message.text)
+                    ? message.text.join("\n")
+                    : String(message.text ?? "");
+                const executionId = (this.__simpleMdDisplayExecutionId ?? 0) + 1;
+                this.__simpleMdDisplayExecutionId = executionId;
+
+                const stateWidget = this.widgets?.find(w => w.name === "display_text");
+                if (stateWidget) {
+                    stateWidget.value = text;
+                    markGraphDirty();
+                }
                 const previewWidgets =
                     this.widgets?.filter(w => w.name === "preview") ?? [];
                 for (const w of previewWidgets) {
-                    const text = message?.text ?? "";
-                    w.value = Array.isArray(text) ? text.join("\n") : text;
+                    w.value = text;
                 }
+
+                inlineMarkdownImages(text).then((inlinedText) => {
+                    if (this.__simpleMdDisplayExecutionId !== executionId) {
+                        return;
+                    }
+
+                    const latestStateWidget = this.widgets?.find(w => w.name === "display_text");
+                    if (latestStateWidget) {
+                        latestStateWidget.value = inlinedText;
+                        markGraphDirty();
+                    }
+                    const latestPreviewWidgets =
+                        this.widgets?.filter(w => w.name === "preview") ?? [];
+                    for (const w of latestPreviewWidgets) {
+                        w.value = inlinedText;
+                    }
+                });
                 return r;
             };
         }

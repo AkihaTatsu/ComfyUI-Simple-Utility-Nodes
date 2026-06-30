@@ -518,8 +518,8 @@ select { font-family: inherit; }
         <div class="rerun-group">
             <button id="rerunBtn" title="Interrupt (if running) and rerun the last workflow">⟳ Rerun (Same Task)</button>
             <select id="rerunMode" title="Choose rerun mode">
-                <option value="same">▾ Same Task</option>
                 <option value="new">▾ New Task</option>
+                <option value="same">▾ Same Task</option>
             </select>
         </div>
         <label>Fit
@@ -624,6 +624,8 @@ let displayToken = 0;
 
 const HISTORY_CLEAR_COUNTER_KEY = 'simpleutility.globalpreview.historyClearCounter';
 const MEDIA_KIND_KEY = '_simple_media_kind';
+const MEDIA_KEY = '_simple_media_key';
+const CACHED_URL_KEY = '_simple_cached_url';
 const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'ogv', 'ogg']);
 
 /* Legacy localStorage value is no longer used — history is now stored
@@ -662,13 +664,68 @@ function viewUrl(info) {
 }
 function fullUrl(info) { return viewUrl(info) + '&t=' + Date.now(); }
 
+function absoluteUrl(url) {
+    if (!url) return null;
+    if (/^https?:\/\//i.test(url)) return url;
+    return url;
+}
+
 function mediaKindForInfo(info) {
     const explicit = info?.[MEDIA_KIND_KEY];
     if (explicit === 'video' || explicit === 'image') return explicit;
     const fmt = String(info?.format || info?.mime_type || '').toLowerCase();
     const filename = String(info?.filename || '');
     const ext = filename.includes('.') ? filename.split('.').pop().toLowerCase() : '';
+    if (fmt.startsWith('image/')) return 'image';
     return (fmt.startsWith('video/') || VIDEO_EXTENSIONS.has(ext)) ? 'video' : 'image';
+}
+
+const mediaUrlState = new Map();
+
+function mediaKeyForInfo(info) {
+    return info?.[MEDIA_KEY] || `${info?.type || ''}/${info?.subfolder || ''}/${info?.filename || ''}`;
+}
+
+function candidateUrlsForInfo(info, initialUrl) {
+    const urls = [];
+    const cachedUrl = absoluteUrl(info?.[CACHED_URL_KEY]);
+    if (cachedUrl) urls.push(cachedUrl);
+    if (initialUrl) urls.push(initialUrl);
+    else if (info?.filename) urls.push(viewUrl(info) + '&t=' + encodeURIComponent(mediaKeyForInfo(info)));
+    return [...new Set(urls)];
+}
+
+function urlStateForInfo(info, initialUrl) {
+    const key = mediaKeyForInfo(info);
+    const candidates = candidateUrlsForInfo(info, initialUrl);
+    const signature = candidates.join('\n');
+    let state = mediaUrlState.get(key);
+    if (!state || state.signature !== signature) {
+        state = { signature, candidates, index: 0, successUrl: null };
+        mediaUrlState.set(key, state);
+    }
+    return state;
+}
+
+function preferredUrlForInfo(info, initialUrl) {
+    const state = urlStateForInfo(info, initialUrl);
+    return state.successUrl || state.candidates[state.index] || initialUrl || fullUrl(info);
+}
+
+function markUrlSuccess(info, url, initialUrl) {
+    const state = urlStateForInfo(info, initialUrl);
+    state.successUrl = url;
+}
+
+function nextUrlAfterFailure(info, url, initialUrl) {
+    const state = urlStateForInfo(info, initialUrl);
+    const currentIndex = state.candidates.indexOf(url);
+    if (currentIndex >= state.index) state.index = currentIndex;
+    if (state.index < state.candidates.length - 1) {
+        state.index += 1;
+        return state.candidates[state.index];
+    }
+    return null;
 }
 
 function currentMediaEl() {
@@ -704,10 +761,11 @@ function mediaLabel(info) {
 }
 
 /* ── MEDIA DISPLAY ── */
-function showImageFromUrl(url, label) {
+function showImageFromUrl(url, label, info = null, initialUrl = null) {
     const token = ++displayToken;
     $img.onload = () => {
         if (token !== displayToken) return;
+        if (info) markUrlSuccess(info, url, initialUrl);
         showActiveMedia('image');
         $infoLeft.textContent = label;
         $infoRight.textContent = 'Updated: ' + new Date().toLocaleTimeString();
@@ -716,15 +774,21 @@ function showImageFromUrl(url, label) {
     $img.onerror = () => {
         if (token !== displayToken) return;
         console.warn('Image load failed:', url);
+        const nextUrl = info ? nextUrlAfterFailure(info, url, initialUrl) : null;
+        if (nextUrl) {
+            showImageFromUrl(nextUrl, label, info, initialUrl);
+            return;
+        }
         $infoRight.textContent = 'Image load error — retrying…';
     };
     $img.src = url;
 }
 
-function showVideoFromUrl(url, label) {
+function showVideoFromUrl(url, label, info = null, initialUrl = null) {
     const token = ++displayToken;
     $video.onloadedmetadata = () => {
         if (token !== displayToken) return;
+        if (info) markUrlSuccess(info, url, initialUrl);
         showActiveMedia('video');
         $infoLeft.textContent = label;
         $infoRight.textContent = 'Updated: ' + new Date().toLocaleTimeString();
@@ -734,6 +798,11 @@ function showVideoFromUrl(url, label) {
     $video.onerror = () => {
         if (token !== displayToken) return;
         console.warn('Video load failed:', url);
+        const nextUrl = info ? nextUrlAfterFailure(info, url, initialUrl) : null;
+        if (nextUrl) {
+            showVideoFromUrl(nextUrl, label, info, initialUrl);
+            return;
+        }
         $infoRight.textContent = 'Video load error — retrying…';
     };
     $video.autoplay = true;
@@ -746,12 +815,13 @@ function showVideoFromUrl(url, label) {
 }
 
 function showMediaFromUrl(info, url, label) {
-    if (mediaKindForInfo(info) === 'video') showVideoFromUrl(url, label);
-    else showImageFromUrl(url, label);
+    const selectedUrl = preferredUrlForInfo(info, url);
+    if (mediaKindForInfo(info) === 'video') showVideoFromUrl(selectedUrl, label, info, url);
+    else showImageFromUrl(selectedUrl, label, info, url);
 }
 
 function showExecutedImage(info) {
-    const key = `${info.type}/${info.subfolder || ''}/${info.filename}`;
+    const key = mediaKeyForInfo(info);
     if (key === lastKey) return;
     lastKey = key;
     const url = fullUrl(info);
@@ -815,13 +885,40 @@ $fitMode.addEventListener('change', () => {
 
 /* ── HISTORY ── */
 function addToHistory(info, cachedUrl, skipRender) {
+    const key = mediaKeyForInfo(info);
     if (historyItems.length) {
         const last = historyItems[historyItems.length - 1];
-        if (last.info.filename === info.filename && last.info.type === info.type) return;
+        if (mediaKeyForInfo(last.info) === key) return;
     }
     historyItems.push({ info, cachedUrl: cachedUrl || viewUrl(info) });
     if (historyItems.length > MAX_HISTORY) historyItems.shift();
     if (!skipRender) renderHistory();
+}
+
+function setElementSourceWithFallback(el, info, initialUrl, onSuccess) {
+    const isVideo = el.tagName.toLowerCase() === 'video';
+    const applyUrl = (url) => {
+        if (!url) return;
+        const success = () => {
+            markUrlSuccess(info, url, initialUrl);
+            if (onSuccess) onSuccess(url);
+        };
+        const fail = () => {
+            const nextUrl = nextUrlAfterFailure(info, url, initialUrl);
+            if (nextUrl) applyUrl(nextUrl);
+        };
+        if (isVideo) {
+            el.onloadedmetadata = success;
+            el.onerror = fail;
+            el.src = url;
+            el.load();
+        } else {
+            el.onload = success;
+            el.onerror = fail;
+            el.src = url;
+        }
+    };
+    applyUrl(preferredUrlForInfo(info, initialUrl));
 }
 
 function renderHistory() {
@@ -832,17 +929,18 @@ function renderHistory() {
         div.className = 'history-item';
         const isVideo = mediaKindForInfo(item.info) === 'video';
         const thumb = document.createElement(isVideo ? 'video' : 'img');
-        thumb.src = item.cachedUrl;
         if (isVideo) {
             thumb.muted = true;
             thumb.loop = true;
             thumb.playsInline = true;
             thumb.preload = 'metadata';
+            setElementSourceWithFallback(thumb, item.info, item.cachedUrl);
             thumb.addEventListener('mouseenter', () => thumb.play().catch(() => {}));
             thumb.addEventListener('mouseleave', () => thumb.pause());
         } else {
             thumb.loading = 'lazy';
             thumb.alt = item.info.filename;
+            setElementSourceWithFallback(thumb, item.info, item.cachedUrl);
         }
         div.appendChild(thumb);
         div.addEventListener('click', () => openLightbox(item));
@@ -858,6 +956,8 @@ $historyBtn.addEventListener('click', () => {
 
 $historyClear.addEventListener('click', async () => {
     historyItems = [];
+    mediaUrlState.clear();
+    lastKey = null;
     renderHistory();
     try {
         const r = await fetch('/simple_utility/global_image_preview/clear_history', {
@@ -880,18 +980,16 @@ function openLightbox(item) {
     $lightboxVideo.style.display = isVideo ? 'block' : 'none';
     if (isVideo) {
         $lightboxImg.removeAttribute('src');
-        $lightboxVideo.onloadedmetadata = () => {
+        setElementSourceWithFallback($lightboxVideo, item.info, item.cachedUrl, () => {
             try { $lightboxVideo.currentTime = 0; } catch (_) {}
             $lightboxVideo.play().catch(() => {});
-        };
-        $lightboxVideo.src = item.cachedUrl;
-        $lightboxVideo.load();
+        });
     } else {
         $lightboxVideo.onloadedmetadata = null;
         $lightboxVideo.pause();
         $lightboxVideo.removeAttribute('src');
         $lightboxVideo.load();
-        $lightboxImg.src = item.cachedUrl;
+        setElementSourceWithFallback($lightboxImg, item.info, item.cachedUrl);
     }
     $lightboxInfo.textContent = `${item.info.filename}  (${item.info.type})`;
     $lightbox.classList.add('open');
@@ -913,7 +1011,7 @@ $lightboxClose.addEventListener('click', (e) => { e.stopPropagation(); closeLigh
 $lightbox.addEventListener('click', (e) => { if (e.target === $lightbox) closeLightbox(); });
 $lightboxImg.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (lightboxItem) window.open(fullUrl(lightboxItem.info), '_blank');
+    if (lightboxItem) window.open(preferredUrlForInfo(lightboxItem.info, lightboxItem.cachedUrl), '_blank');
 });
 $lightboxVideo.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1265,7 +1363,7 @@ async function pollLoop() {
                         const lastImgs = lastBatch.images || [];
                         if (lastImgs.length > 0) {
                             const info = lastImgs[lastImgs.length - 1];
-                            const key = `${info.type}/${info.subfolder || ''}/${info.filename}`;
+                            const key = mediaKeyForInfo(info);
                             if (key !== lastKey) {
                                 lastKey = key;
                                 showMediaFromUrl(info, fullUrl(info), mediaLabel(info));

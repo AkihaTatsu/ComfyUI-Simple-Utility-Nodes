@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { ComfyWidgets } from "../../scripts/widgets.js";
 import { installPassthroughTypeResolver } from "./type_resolver.js";
 
 app.registerExtension({
@@ -10,7 +11,8 @@ app.registerExtension({
             nodeData.name === "SimpleGlobalVariableOutput" ||
             nodeData.name === "SimpleGlobalVRAMCacheSaving" ||
             nodeData.name === "SimpleGlobalVRAMCacheLoading" ||
-            nodeData.name === "SimpleGlobalVRAMCacheRAMClearing") {
+            nodeData.name === "SimpleGlobalVRAMCacheRAMClearing" ||
+            nodeData.name === "SimpleGlobalDeepCleanup") {
             
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
@@ -21,6 +23,23 @@ app.registerExtension({
                 if (paleBlueColor) {
                     this.color = paleBlueColor.color;
                     this.bgcolor = paleBlueColor.bgcolor;
+                }
+
+                if (nodeData.name === "SimpleGlobalDeepCleanup" && !this._simpleDeepCleanupNote) {
+                    this._simpleDeepCleanupNote = true;
+                    const widget = ComfyWidgets["STRING"](
+                        this,
+                        "cleanup_hint",
+                        ["STRING", { multiline: true }],
+                        app
+                    ).widget;
+
+                    widget.value = "Hint: Schedules extra cleanup after the run ends. Visible history/display state is preserved. Multiple Deep Cleanup nodes: end cleanup runs once.";
+                    widget.inputEl.readOnly = true;
+                    if (widget.element) {
+                        widget.element.readOnly = true;
+                    }
+                    widget.serializeValue = async () => "";
                 }
                 
                 return result;
@@ -41,6 +60,11 @@ app.registerExtension({
             installPassthroughTypeResolver(nodeType, 0, 0);
         }
 
+        // SimpleGlobalDeepCleanup input slot 1 = 'anything', output slot 0 = 'passthrough'
+        if (nodeData.name === "SimpleGlobalDeepCleanup") {
+            installPassthroughTypeResolver(nodeType, 1, 0);
+        }
+
         // ── SimpleGlobalImagePreview ──────────────────────────────
         if (nodeData.name === "SimpleGlobalImagePreview") {
 
@@ -57,6 +81,8 @@ app.registerExtension({
             };
 
             const MEDIA_KIND_KEY = "_simple_media_kind";
+            const MEDIA_KEY = "_simple_media_key";
+            const CACHED_URL_KEY = "_simple_cached_url";
             const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "m4v", "mkv", "avi", "ogv", "ogg"]);
 
             function animatedIsTruthy(value) {
@@ -70,10 +96,68 @@ app.registerExtension({
                 const fmt = String(info?.format || info?.mime_type || "").toLowerCase();
                 const filename = String(info?.filename || "");
                 const ext = filename.includes(".") ? filename.split(".").pop().toLowerCase() : "";
-                if (fmt.startsWith("video/") || VIDEO_EXTENSIONS.has(ext) || animatedIsTruthy(output?.animated)) {
+                if (fmt.startsWith("image/")) return "image";
+                if (fmt.startsWith("video/") || VIDEO_EXTENSIONS.has(ext)) {
                     return "video";
                 }
                 return "image";
+            }
+
+            const mediaUrlState = new Map();
+
+            function mediaKeyForInfo(info) {
+                return info?.[MEDIA_KEY] || `${info?.type || ""}/${info?.subfolder || ""}/${info?.filename || ""}`;
+            }
+
+            function absoluteUrl(url) {
+                if (!url) return null;
+                if (/^https?:\/\//i.test(url)) return url;
+                return api.apiURL(url);
+            }
+
+            function originalViewUrl(info) {
+                return api.apiURL(
+                    `/view?filename=${encodeURIComponent(info.filename)}`
+                    + `&type=${encodeURIComponent(info.type)}`
+                    + `&subfolder=${encodeURIComponent(info.subfolder || "")}`
+                    + `&t=${encodeURIComponent(mediaKeyForInfo(info))}`
+                );
+            }
+
+            function candidateUrlsForInfo(info) {
+                const urls = [];
+                const cachedUrl = absoluteUrl(info?.[CACHED_URL_KEY]);
+                if (cachedUrl) urls.push(cachedUrl);
+                if (info?.filename) urls.push(originalViewUrl(info));
+                return [...new Set(urls)];
+            }
+
+            function urlStateForInfo(info) {
+                const key = mediaKeyForInfo(info);
+                const candidates = candidateUrlsForInfo(info);
+                const signature = candidates.join("\n");
+                let state = mediaUrlState.get(key);
+                if (!state || state.signature !== signature) {
+                    state = { signature, candidates, index: 0, successUrl: null };
+                    mediaUrlState.set(key, state);
+                }
+                return state;
+            }
+
+            function extractMediaItems(output) {
+                const items = [];
+                const seen = new Set();
+                if (!output || typeof output !== "object") return items;
+                for (const value of Object.values(output)) {
+                    if (!Array.isArray(value)) continue;
+                    for (const item of value) {
+                        if (!item || typeof item !== "object" || !item.filename) continue;
+                        if (seen.has(item)) continue;
+                        seen.add(item);
+                        items.push(item);
+                    }
+                }
+                return items;
             }
 
             /** Notify every instance to redraw */
@@ -124,16 +208,12 @@ app.registerExtension({
              * @param {{filename:string, subfolder:string, type:string}} info
              */
             function showExecutedMedia(info, output = null) {
-                const key = `${info.type}/${info.subfolder || ""}/${info.filename}`;
+                const key = mediaKeyForInfo(info);
                 if (key === shared.lastKey) return; // no change
                 shared.lastKey = key;
-
-                const url = api.apiURL(
-                    `/view?filename=${encodeURIComponent(info.filename)}`
-                    + `&type=${encodeURIComponent(info.type)}`
-                    + `&subfolder=${encodeURIComponent(info.subfolder || "")}`
-                    + `&t=${Date.now()}`
-                );
+                const state = urlStateForInfo(info);
+                const url = state.successUrl || state.candidates[state.index];
+                if (!url) return;
 
                 const mediaKind = mediaKindForInfo(info, output);
                 if (mediaKind === "video") {
@@ -145,6 +225,7 @@ app.registerExtension({
                     video.controls = false;
                     video.preload = "auto";
                     video.onloadedmetadata = () => {
+                        state.successUrl = url;
                         revokePreviewBlob();
                         clearMedia();
                         shared.mediaEl = video;
@@ -156,6 +237,11 @@ app.registerExtension({
                     };
                     video.onerror = () => {
                         console.warn("Global Image Preview video load failed:", url);
+                        if (state.index < state.candidates.length - 1) {
+                            state.index += 1;
+                            shared.lastKey = null;
+                            showExecutedMedia(info, output);
+                        }
                     };
                     video.src = url;
                     return;
@@ -163,6 +249,7 @@ app.registerExtension({
 
                 const img = new Image();
                 img.onload = () => {
+                    state.successUrl = url;
                     revokePreviewBlob();
                     clearMedia();
                     shared.mediaEl = img;
@@ -170,7 +257,30 @@ app.registerExtension({
                     shared.sourceLabel = `${info.filename}  (${img.naturalWidth}×${img.naturalHeight})`;
                     repaintAll();
                 };
+                img.onerror = () => {
+                    console.warn("Global Image Preview image load failed:", url);
+                    if (state.index < state.candidates.length - 1) {
+                        state.index += 1;
+                        shared.lastKey = null;
+                        showExecutedMedia(info, output);
+                    }
+                };
                 img.src = url;
+            }
+
+            async function showLatestServerMedia() {
+                try {
+                    const resp = await fetch(
+                        api.apiURL("/simple_utility/global_image_preview/latest"),
+                        { cache: "no-store" }
+                    );
+                    if (!resp.ok) return;
+                    const data = await resp.json();
+                    const items = data.images || [];
+                    if (items.length > 0) {
+                        showExecutedMedia(items[items.length - 1], null);
+                    }
+                } catch (_) {}
             }
 
             /**
@@ -206,9 +316,11 @@ app.registerExtension({
                     const detail = event.detail;
                     if (!detail) return;
                     const output = detail.output ?? detail;
-                    if (output && output.images && output.images.length > 0) {
-                        const latest = output.images[output.images.length - 1];
+                    const mediaItems = extractMediaItems(output);
+                    if (mediaItems.length > 0) {
+                        const latest = mediaItems[mediaItems.length - 1];
                         showExecutedMedia(latest, output);
+                        showLatestServerMedia();
                     }
                 });
 
@@ -220,6 +332,7 @@ app.registerExtension({
                         showPreviewBlob(event.detail);
                     }
                 });
+
             }
 
             // ── Node lifecycle ──────────────────────────────────────
